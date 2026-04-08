@@ -771,6 +771,58 @@ function RatesTab({ data, setData }: Props) {
             </div>
           </div>
 
+          {/* Overhead per Active Contract */}
+          {(() => {
+            const activeContracts = data.contracts.filter(c => c.status === 'active');
+            const activeCount = activeContracts.length;
+            const totalOverhead = data.overhead.reduce((s, o) => s + o.monthlyCost, 0);
+            const isMaint = activeForm?.category === 'maintenance';
+            const isLand  = activeForm?.category === 'landscaping';
+            if (!isMaint && !isLand) return null;
+            const accentColor   = isMaint ? 'border-green-400/40 bg-green-900/20' : 'border-blue-400/40 bg-blue-900/20';
+            const labelColor    = isMaint ? 'text-green-300' : 'text-blue-300';
+            const valueColor    = isMaint ? 'text-green-400' : 'text-blue-400';
+            const badgeColor    = isMaint ? 'bg-green-700/40 text-green-200' : 'bg-blue-700/40 text-blue-200';
+            const overheadPer   = activeCount > 0 ? totalOverhead / activeCount : 0;
+            const monthlyLabor  = laborPerVisit * visitsPerMonth;
+            const laborPer      = activeCount > 0 ? monthlyLabor / activeCount : 0;
+            return (
+              <div className={`card bg-gray-900 text-white border ${accentColor}`}>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className={`text-xs font-bold uppercase tracking-widest ${labelColor}`}>
+                    Cost Per Active Contract
+                  </h3>
+                  <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${badgeColor}`}>
+                    {activeCount} Active {activeCount === 1 ? 'Contract' : 'Contracts'}
+                  </span>
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between items-center py-1.5 border-b border-white/10">
+                    <div>
+                      <p className="font-medium">Labor</p>
+                      <p className="text-xs text-gray-400">{formatCurrency(monthlyLabor)}/mo ÷ {activeCount} contracts</p>
+                    </div>
+                    <p className={`font-semibold ${valueColor}`}>{activeCount > 0 ? formatCurrency(laborPer) : '—'}</p>
+                  </div>
+                  <div className="flex justify-between items-center py-1.5 border-b border-white/10">
+                    <div>
+                      <p className="font-medium">Fixed Overhead</p>
+                      <p className="text-xs text-gray-400">{formatCurrency(totalOverhead)}/mo ÷ {activeCount} contracts</p>
+                    </div>
+                    <p className={`font-semibold ${valueColor}`}>{activeCount > 0 ? formatCurrency(overheadPer) : '—'}</p>
+                  </div>
+                  <div className="flex justify-between items-center pt-3 border-t border-white/20">
+                    <p className="font-bold">Total Per Contract</p>
+                    <p className={`text-lg font-bold ${valueColor}`}>{activeCount > 0 ? formatCurrency(laborPer + overheadPer) : '—'}</p>
+                  </div>
+                </div>
+                {activeCount === 0 && (
+                  <p className="text-xs text-gray-500 mt-2 italic">No active contracts found — add contracts with status "Active" to see per-contract costs.</p>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Current pricing */}
           <div className="card">
             <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">Catalog Pricing</h3>

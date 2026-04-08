@@ -1,0 +1,22 @@
+{
+  "appId": "co.greensun.estimator",
+  "productName": "GreenSun Estimator",
+  "directories": { "output": "release" },
+  "files": ["dist/**/*", "electron/**/*", "node_modules/**/*", "package.json"],
+  "win": {
+    "target": "nsis",
+    "icon": "public/logo.png"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true
+  },
+  "publish": {
+    "provider": "github",
+    "owner": "ivanark8161-art",
+    "repo": "greensun-estimator",
+    "private": false
+  },
+  "mac": { "target": "dmg" }
+}

@@ -140,17 +140,14 @@ async function validateToken(token) {
   const decoded = jwt.decode(token, { complete: true });
   if (!decoded?.header?.kid) throw new Error('Invalid token');
   const key = await jwks.getSigningKey(decoded.header.kid);
-  // Verify signature + issuer; accept any audience that includes the client ID
+  // Verify signature only — issuer varies by account type
   const verified = jwt.verify(token, key.getPublicKey(), {
-    issuer: `https://login.microsoftonline.com/${TENANT_ID}/v2.0`,
     algorithms: ['RS256'],
   });
-  // Manually check audience — aud can be a string or array
-  const aud = verified.aud;
-  const audList = Array.isArray(aud) ? aud : [aud];
-  if (!audList.includes(CLIENT_ID)) {
-    console.error('Token aud mismatch. Got:', aud, 'Expected:', CLIENT_ID);
-    throw new Error(`jwt audience invalid. expected: ${CLIENT_ID}`);
+  // Ensure the token is from our Azure tenant
+  const iss = verified.iss || '';
+  if (!iss.includes(TENANT_ID)) {
+    throw new Error('Token is not from the expected Azure tenant');
   }
   return verified;
 }

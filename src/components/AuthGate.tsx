@@ -13,7 +13,7 @@ export default function AuthGate({ loading: _loading, error }: AuthGateProps) {
   if (error) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-[#111111]">
-        <img src="/logo.png" alt="GreenSun Landscapes" className="mb-6 h-20 w-auto" />
+        <img src="./logo.png" alt="GreenSun Landscapes" className="mb-6 h-20 w-auto" />
         <h1 className="mb-2 text-2xl font-bold text-white">GreenSun Estimator</h1>
         <p className="mb-8 text-center text-red-400">
           Access denied. Contact your administrator.
@@ -31,7 +31,7 @@ export default function AuthGate({ loading: _loading, error }: AuthGateProps) {
   // Default: loading state
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-[#111111]">
-      <img src="/logo.png" alt="GreenSun Landscapes" className="mb-6 h-20 w-auto" />
+      <img src="./logo.png" alt="GreenSun Landscapes" className="mb-6 h-20 w-auto" />
       <h1 className="mb-2 text-2xl font-bold text-white">GreenSun Estimator</h1>
       <div className="flex items-center gap-3 text-gray-300">
         <svg

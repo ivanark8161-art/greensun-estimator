@@ -98,7 +98,10 @@ const MONGODB_URI = process.env.MONGODB_URI ||
 let mongoClient, db;
 
 async function connectMongo() {
-  mongoClient = new MongoClient(MONGODB_URI);
+  mongoClient = new MongoClient(MONGODB_URI, {
+    tls: true,
+    tlsInsecure: true,
+  });
   await mongoClient.connect();
   db = mongoClient.db('greensun');
   console.log('Connected to MongoDB');

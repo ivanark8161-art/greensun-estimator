@@ -254,7 +254,10 @@ app.get('/auth/callback', async (req, res) => {
       createdAt: Date.now(),
     };
     writeTokens(tokens);
-    res.redirect(process.env.APP_URL ? `${process.env.APP_URL}/invoices` : 'http://127.0.0.1:5176/invoices');
+    res.send(`<!DOCTYPE html><html><body style="font-family:sans-serif;text-align:center;padding:60px">
+      <h2 style="color:#27AE60">✓ QuickBooks Connected!</h2>
+      <p>You can close this tab and return to GreenSun Estimator.</p>
+    </body></html>`);
   } catch (err) {
     console.error('OAuth callback error:', err);
     res.status(500).send(`OAuth error: ${err.message}`);

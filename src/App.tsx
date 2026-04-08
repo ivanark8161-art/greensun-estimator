@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import type { AppData } from './types';
 import { initAuth, isElectron } from './utils/auth';
 import AuthGate from './components/AuthGate';
@@ -56,7 +56,7 @@ export default function App() {
   if (authError)  return <AuthGate error />;
 
   return (
-    <BrowserRouter>
+    <HashRouter>
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index                    element={<Dashboard    data={data} />} />
@@ -83,6 +83,6 @@ export default function App() {
           <Route path="reports"           element={<Reports      data={data} />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   );
 }

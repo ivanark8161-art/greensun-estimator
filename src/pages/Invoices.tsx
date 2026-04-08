@@ -267,12 +267,17 @@ export default function Invoices({ data, setData }: Props) {
       {qboConnected === false && (
         <div className="mb-4 flex items-center justify-between rounded-xl border border-yellow-300 bg-yellow-50 px-4 py-3">
           <span className="text-sm font-medium text-yellow-800">QuickBooks not connected</span>
-          <a
-            href={`${import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:3001'}/auth/quickbooks`}
+          <button
             className="btn-primary text-sm"
+            onClick={() => {
+              const url = `${import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:3001'}/auth/quickbooks`;
+              const api = (window as any).electronAPI;
+              if (api?.openExternal) api.openExternal(url);
+              else window.open(url, '_blank');
+            }}
           >
             Connect QuickBooks
-          </a>
+          </button>
         </div>
       )}
       {qboConnected === true && (

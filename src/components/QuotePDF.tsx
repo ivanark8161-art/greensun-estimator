@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Document,
   Page,
@@ -5,7 +6,7 @@ import {
   Text,
   Image,
   StyleSheet,
-  PDFDownloadLink,
+  pdf,
 } from '@react-pdf/renderer';
 import type { EstimateLineItem } from '../types';
 
@@ -340,52 +341,72 @@ export default function QuotePDFButton({
   estimateNumber, clientName, address, city, state, zip,
   lineItems, jobType, totalDue, monthlyBilling, createdAt, notes, terms,
 }: DownloadButtonProps) {
+  const [generating, setGenerating] = useState(false);
+
   const logoUrl = `${window.location.origin}/logo.png`;
   const sentDate = createdAt
     ? new Date(createdAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     : new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 
-  const doc = (
-    <QuotePDFDoc
-      estimateNumber={estimateNumber}
-      clientName={clientName}
-      address={address}
-      city={city}
-      state={state}
-      zip={zip}
-      lineItems={lineItems}
-      jobType={jobType}
-      totalDue={totalDue}
-      monthlyBilling={monthlyBilling}
-      sentDate={sentDate}
-      notes={notes}
-      terms={terms}
-      logoUrl={logoUrl}
-    />
-  );
+  const fileName = `GreenSun-Estimate-${estimateNumber}-${clientName.replace(/\s+/g, '-')}.pdf`;
+
+  async function handleClick() {
+    setGenerating(true);
+    try {
+      const doc = (
+        <QuotePDFDoc
+          estimateNumber={estimateNumber}
+          clientName={clientName}
+          address={address}
+          city={city}
+          state={state}
+          zip={zip}
+          lineItems={lineItems}
+          jobType={jobType}
+          totalDue={totalDue}
+          monthlyBilling={monthlyBilling}
+          sentDate={sentDate}
+          notes={notes}
+          terms={terms}
+          logoUrl={logoUrl}
+        />
+      );
+      const blob = await pdf(doc).toBlob();
+      const api = (window as any).electronAPI;
+      if (api?.savePDF) {
+        // Electron: save to Downloads folder and open
+        const arrayBuffer = await blob.arrayBuffer();
+        await api.savePDF(fileName, Array.from(new Uint8Array(arrayBuffer)));
+      } else {
+        // Browser: trigger download
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   return (
-    <PDFDownloadLink
-      document={doc}
-      fileName={`GreenSun-Estimate-${estimateNumber}-${clientName.replace(/\s+/g, '-')}.pdf`}
+    <button
+      className="btn-secondary text-sm px-4 py-1.5 flex items-center gap-1.5"
+      disabled={generating}
+      onClick={handleClick}
     >
-      {({ loading }) => (
-        <button
-          className="btn-secondary text-sm px-4 py-1.5 flex items-center gap-1.5"
-          disabled={loading}
-        >
-          {loading ? (
-            <span className="text-gray-400">Generating…</span>
-          ) : (
-            <>
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
-              </svg>
-              PDF
-            </>
-          )}
-        </button>
+      {generating ? (
+        <span className="text-gray-400">Generating…</span>
+      ) : (
+        <>
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+          </svg>
+          PDF
+        </>
       )}
-    </PDFDownloadLink>
+    </button>
   );
 }

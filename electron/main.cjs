@@ -6,6 +6,7 @@ const { PublicClientApplication } = require('@azure/msal-node');
 const http = require('http');
 const path = require('path');
 const url  = require('url');
+const fs   = require('fs');
 
 // ── Azure AD config ───────────────────────────────────────────────────────────
 const CLIENT_ID  = '6d3e9ad5-f2c4-4542-b1f4-43d64838e122';
@@ -166,6 +167,18 @@ ipcMain.handle('auth:logout', async () => {
   cachedUser    = null;
   app.relaunch();
   app.exit();
+});
+
+ipcMain.handle('shell:openExternal', (_event, url) => {
+  shell.openExternal(url);
+});
+
+ipcMain.handle('pdf:save', async (_event, fileName, buffer) => {
+  const downloadsPath = app.getPath('downloads');
+  const filePath = path.join(downloadsPath, fileName);
+  fs.writeFileSync(filePath, Buffer.from(buffer));
+  shell.openPath(filePath);
+  return filePath;
 });
 
 // ── Auto-updater config ───────────────────────────────────────────────────────

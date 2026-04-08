@@ -40,7 +40,13 @@ export default function App() {
       }
       setAuthReady(true);
       loadFromServer().then(serverData => {
-        if (serverData) { setData(serverData); saveData(serverData); }
+        if (serverData) {
+          setData(serverData);
+          saveData(serverData);
+        } else {
+          // Server empty — push our local defaults up to seed it
+          saveData(loadData());
+        }
       }).catch(() => {});
     };
     init();

@@ -15,12 +15,20 @@ const app  = express();
 const PORT = process.env.PORT || 3001;
 
 // ── CORS ────────────────────────────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  'http://localhost:5176',
+  'http://127.0.0.1:5176',
+  'https://greensun-estimator-production.up.railway.app',
+];
 app.use(cors({
-  origin: [
-    'http://localhost:5176',
-    'http://127.0.0.1:5176',
-    'https://greensun-estimator-production.up.railway.app',
-  ],
+  origin: (origin, callback) => {
+    // Allow Electron apps (null/file:// origin) and known web origins
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));

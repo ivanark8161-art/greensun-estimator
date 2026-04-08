@@ -157,15 +157,19 @@ export function saveData(data: AppData): void {
   }).catch(() => {});
 }
 
-// Fetch from file, apply migrations, return hydrated data.
-// Returns null if server is unreachable or file is empty.
+// Fetch from server, apply migrations, return hydrated data.
+// Returns null if server is unreachable or data is empty/meaningless.
 export async function loadFromServer(): Promise<AppData | null> {
   try {
     const res = await fetch(`${SERVER_URL}/api/data`, { headers: { ...getAuthHeaders() } });
     if (!res.ok) return null;
     const raw = await res.json() as AppData;
     if (!raw || Object.keys(raw).length === 0) return null;
-    // Store raw data so applyMigrations has access via the shared helper
+    // If server has data but all key arrays are empty, treat as blank slate
+    const hasContent = (raw.employees?.length ?? 0) > 0
+      || (raw.contracts?.length ?? 0) > 0
+      || (raw.equipment?.length ?? 0) > 0;
+    if (!hasContent) return null;
     return applyMigrations(raw);
   } catch {
     return null;

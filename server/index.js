@@ -10,6 +10,7 @@ const OAuthClient = require('intuit-oauth');
 const { MongoClient } = require('mongodb');
 const jwt        = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
+const { Resend }  = require('resend');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -437,6 +438,186 @@ app.post('/api/allowlist', authMiddleware, async (req, res) => {
 app.delete('/api/allowlist/:email', authMiddleware, async (req, res) => {
   await db.collection('allowlist').deleteOne({ email: req.params.email.toLowerCase() });
   res.json({ ok: true });
+});
+
+// ── Email: Send estimate for signature ────────────────────────────────────────
+const resend = new Resend(process.env.RESEND_API_KEY);
+const RAILWAY_URL = process.env.RAILWAY_URL || 'https://greensun-estimator-production.up.railway.app';
+const FROM_EMAIL  = process.env.FROM_EMAIL  || 'onboarding@resend.dev';
+
+app.post('/api/send-estimate', authMiddleware, async (req, res) => {
+  try {
+    const { contractId, clientName, clientEmail, estimateNumber, contractText } = req.body;
+    if (!clientEmail) return res.status(400).json({ error: 'clientEmail is required' });
+
+    const signLink = `${RAILWAY_URL}/sign/${contractId}`;
+
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to:   clientEmail,
+      subject: `GreenSun Landscapes — Estimate #${estimateNumber} Ready for Review`,
+      html: `
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto">
+          <div style="background:#111;padding:24px;border-radius:8px 8px 0 0">
+            <h1 style="color:#27AE60;margin:0;font-size:22px">GreenSun Landscapes</h1>
+          </div>
+          <div style="background:#f9fafb;padding:32px;border-radius:0 0 8px 8px;border:1px solid #e5e7eb">
+            <p style="font-size:16px;color:#111;margin-top:0">Hi ${clientName},</p>
+            <p style="color:#444">Your estimate <strong>#${estimateNumber}</strong> is ready for review. Please click the button below to view your estimate, review the service agreement, and sign electronically.</p>
+            <div style="text-align:center;margin:32px 0">
+              <a href="${signLink}" style="background:#27AE60;color:#fff;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:16px;font-weight:600;display:inline-block">
+                Review & Sign Estimate →
+              </a>
+            </div>
+            <p style="color:#888;font-size:13px">This link is unique to your estimate. If you have questions, reply to this email or call us at 715-347-2340.</p>
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+            <p style="color:#aaa;font-size:11px;margin:0">GreenSun Landscapes LLC · 7221 Chicago Avenue, Minneapolis MN 55423 · info@greensun.co</p>
+          </div>
+        </div>
+      `,
+    });
+
+    // Store pending signature record in MongoDB
+    await db.collection('signatures').updateOne(
+      { contractId },
+      { $set: { contractId, clientName, clientEmail, estimateNumber, contractText: contractText || '', status: 'pending', sentAt: new Date(), signedAt: null, signatureData: null } },
+      { upsert: true }
+    );
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Send estimate error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Public: Signature page data ───────────────────────────────────────────────
+app.get('/sign/:contractId', async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const appData = await readAppData();
+    const contract = (appData.contracts || []).find(c => c.id === contractId);
+    const sig = await db.collection('signatures').findOne({ contractId });
+    if (!contract || !sig) return res.status(404).send('<h2>Estimate not found or link expired.</h2>');
+
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GreenSun Estimate #${sig.estimateNumber}</title>
+  <style>
+    body { font-family: sans-serif; background: #f9fafb; margin: 0; padding: 20px; }
+    .container { max-width: 700px; margin: 0 auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    .header { background: #111; padding: 24px 32px; }
+    .header h1 { color: #27AE60; margin: 0; font-size: 22px; }
+    .body { padding: 32px; }
+    .contract-box { background: #f3f4f6; border-radius: 8px; padding: 20px; font-size: 13px; color: #444; white-space: pre-wrap; max-height: 300px; overflow-y: auto; border: 1px solid #e5e7eb; margin: 20px 0; }
+    canvas { border: 2px solid #27AE60; border-radius: 8px; cursor: crosshair; display: block; margin: 16px 0; }
+    .btn { background: #27AE60; color: white; border: none; padding: 14px 32px; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; }
+    .btn:disabled { background: #aaa; cursor: not-allowed; }
+    .btn-clear { background: #e5e7eb; color: #444; border: none; padding: 8px 16px; border-radius: 6px; font-size: 13px; cursor: pointer; margin-left: 8px; }
+    .success { background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; padding: 24px; text-align: center; color: #166534; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header"><h1>GreenSun Landscapes — Estimate #${sig.estimateNumber}</h1></div>
+    <div class="body">
+      ${sig.status === 'signed' ? `
+        <div class="success">
+          <h2>✓ Already Signed</h2>
+          <p>This estimate was signed on ${new Date(sig.signedAt).toLocaleDateString()}. Thank you, ${sig.clientName}!</p>
+        </div>
+      ` : `
+        <p style="color:#444">Hi <strong>${sig.clientName}</strong>, please review your estimate and service agreement below, then sign in the box to approve.</p>
+        ${sig.contractText ? `<div class="contract-box">${sig.contractText}</div>` : ''}
+        <h3 style="margin-bottom:8px">Your Signature</h3>
+        <canvas id="sig-canvas" width="600" height="150"></canvas>
+        <div>
+          <button class="btn-clear" onclick="clearSig()">Clear</button>
+        </div>
+        <p style="font-size:12px;color:#888">By clicking "Approve & Sign" you agree to the estimate and service agreement above.</p>
+        <button class="btn" id="submit-btn" onclick="submitSig('${contractId}')">Approve & Sign</button>
+        <div id="msg" style="margin-top:16px;font-size:14px"></div>
+      `}
+    </div>
+  </div>
+  <script>
+    const canvas = document.getElementById('sig-canvas');
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      let drawing = false;
+      canvas.addEventListener('mousedown', e => { drawing = true; ctx.beginPath(); ctx.moveTo(e.offsetX, e.offsetY); });
+      canvas.addEventListener('mousemove', e => { if (!drawing) return; ctx.lineTo(e.offsetX, e.offsetY); ctx.stroke(); });
+      canvas.addEventListener('mouseup', () => drawing = false);
+      canvas.addEventListener('touchstart', e => { e.preventDefault(); drawing = true; const t = e.touches[0]; const r = canvas.getBoundingClientRect(); ctx.beginPath(); ctx.moveTo(t.clientX - r.left, t.clientY - r.top); });
+      canvas.addEventListener('touchmove', e => { e.preventDefault(); if (!drawing) return; const t = e.touches[0]; const r = canvas.getBoundingClientRect(); ctx.lineTo(t.clientX - r.left, t.clientY - r.top); ctx.stroke(); });
+      canvas.addEventListener('touchend', () => drawing = false);
+    }
+    function clearSig() { const c = document.getElementById('sig-canvas'); if(c) c.getContext('2d').clearRect(0,0,c.width,c.height); }
+    async function submitSig(contractId) {
+      const c = document.getElementById('sig-canvas');
+      const signatureData = c.toDataURL();
+      const btn = document.getElementById('submit-btn');
+      btn.disabled = true; btn.textContent = 'Submitting…';
+      const res = await fetch('/sign/' + contractId, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ signatureData }) });
+      const data = await res.json();
+      if (data.ok) { document.getElementById('msg').innerHTML = '<div style="color:#166534;background:#f0fdf4;padding:16px;border-radius:8px;text-align:center"><strong>✓ Signed! Thank you.</strong><br>A copy will be emailed to you shortly.</div>'; btn.style.display='none'; }
+      else { document.getElementById('msg').textContent = 'Error: ' + data.error; btn.disabled = false; btn.textContent = 'Approve & Sign'; }
+    }
+  </script>
+</body>
+</html>`);
+  } catch (err) {
+    res.status(500).send(`<h2>Error: ${err.message}</h2>`);
+  }
+});
+
+// ── Public: Submit signature ───────────────────────────────────────────────────
+app.post('/sign/:contractId', async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const { signatureData } = req.body;
+    const sig = await db.collection('signatures').findOne({ contractId });
+    if (!sig) return res.status(404).json({ error: 'Not found' });
+
+    await db.collection('signatures').updateOne(
+      { contractId },
+      { $set: { status: 'signed', signedAt: new Date(), signatureData } }
+    );
+
+    // Email notification to GreenSun
+    const adminEmail = process.env.ADMIN_EMAIL || 'info@greensun.co';
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to:   adminEmail,
+      subject: `✓ Estimate #${sig.estimateNumber} Signed by ${sig.clientName}`,
+      html: `<p><strong>${sig.clientName}</strong> has approved and signed estimate <strong>#${sig.estimateNumber}</strong>.</p><p>Signed at: ${new Date().toLocaleString()}</p><p>Log in to GreenSun Estimator to convert this quote to an active job.</p>`,
+    });
+
+    // Email copy to client
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to:   sig.clientEmail,
+      subject: `GreenSun Landscapes — Your Signed Estimate #${sig.estimateNumber}`,
+      html: `<p>Hi ${sig.clientName},</p><p>Thank you for approving estimate <strong>#${sig.estimateNumber}</strong>. We'll be in touch shortly to confirm your start date.</p><p>— GreenSun Landscapes</p>`,
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Get signature status ───────────────────────────────────────────────────────
+app.get('/api/signature/:contractId', authMiddleware, async (req, res) => {
+  try {
+    const sig = await db.collection('signatures').findOne({ contractId: req.params.contractId });
+    res.json(sig || { status: 'not_sent' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────

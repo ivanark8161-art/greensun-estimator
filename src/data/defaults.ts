@@ -25,6 +25,8 @@ export const DEFAULT_DATA: AppData = {
   invoiceCounter: 1,
   projectCounter: 1,
   requestCounter: 0,
+  jobCounter: 1,
+  jobs: [],
   requests: [],
   salesTaxRates: [],
 

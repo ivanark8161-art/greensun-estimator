@@ -20,7 +20,8 @@ const NAV_GROUPS = [
   {
     label: 'Work',
     items: [
-      { to: '/projects',  label: 'Jobs',          icon: '🏗' },
+      { to: '/projects',  label: 'Landscaping',   icon: '🌿' },
+      { to: '/jobs',      label: 'Job Costing',   icon: '🏗' },
     ],
   },
   {

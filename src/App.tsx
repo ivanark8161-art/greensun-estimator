@@ -25,6 +25,7 @@ import Schedule      from './pages/Schedule';
 import Resources     from './pages/Resources';
 import GrowthBudget  from './pages/GrowthBudget';
 import Reports       from './pages/Reports';
+import Jobs          from './pages/Jobs';
 
 export default function App() {
   const [data, setData] = useState<AppData>(() => loadData());
@@ -71,6 +72,8 @@ export default function App() {
           <Route path="clients/new"       element={<Clients      data={data} setData={setData} />} />
           <Route path="clients/:id"       element={<Clients      data={data} setData={setData} />} />
           <Route path="projects"          element={<Projects     data={data} setData={setData} />} />
+          <Route path="projects/:id"      element={<Projects     data={data} setData={setData} />} />
+          <Route path="jobs"              element={<Jobs         data={data} setData={setData} />} />
           <Route path="projects/:id"      element={<Projects     data={data} setData={setData} />} />
           <Route path="contracts"         element={<Projects     data={data} setData={setData} />} />
           <Route path="snow"              element={<SnowRemoval  data={data} setData={setData} />} />

@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   AppData, EstimateLineItem, PropertyType, Month, Contract,
-  ContractStatus, ServiceCatalogItem, AccountingCodeBucket, JobCostingCodes,
+  ContractStatus, ServiceCatalogItem, AccountingCodeBucket, JobCostingCodes, Job,
 } from '../types';
 import { MONTHS, MONTH_LABELS, calcLineItemTotals, lineItemMargin } from '../types';
 import { formatCurrency, formatPercent, generateEstimateNumber } from '../utils/calculations';
@@ -476,11 +476,56 @@ export default function QuoteDetail({ data, setData }: Props) {
 
     const costingCodes: JobCostingCodes = { maintenance: maintenanceCodes, snow: snowCodes };
     const contract = { ...buildContract(), status: 'active' as ContractStatus, costingCodes };
-    const updated = existing
-      ? { ...data, contracts: data.contracts.map(c => c.id === quoteId ? contract : c) }
-      : { ...data, estimateCounter: (data.estimateCounter ?? 7) + 1, contracts: [...data.contracts, contract] };
-    setData(updated); saveData(updated);
-    navigate(`/projects/${quoteId}`);
+
+    // ── Build flat cost codes for Job record (merge maintenance + snow) ───────
+    const allCodes = [...maintenanceCodes];
+    snowCodes.forEach(sc => {
+      const existing = allCodes.find(c => c.category === sc.category);
+      if (existing) existing.budgeted += sc.budgeted;
+      else allCodes.push({ ...sc });
+    });
+
+    // Drive time budget
+    const driveTimeMin = milesFromShop > 0 ? Math.round((milesFromShop / (data.settings.averageSpeedMph || 30)) * 60) * 2 : 0;
+
+    const jobCounter = (data.jobCounter ?? 1);
+    const newJob: Job = {
+      id:               `job_${Date.now()}`,
+      jobNumber:        `J-${String(jobCounter).padStart(3, '0')}`,
+      contractId:       contract.id,
+      clientId:         contract.clientId,
+      clientName:       contract.clientName,
+      title:            contract.title || contract.clientName,
+      jobType:          jobType === 'landscaping' ? 'landscaping' : snowItems.length > 0 && maintItems.length === 0 ? 'snow' : 'maintenance',
+      status:           'active',
+      startDate:        contract.startDate || new Date().toISOString().split('T')[0],
+      endDate:          contract.endDate || '',
+      crewId:           crewId || undefined,
+      costCodes:        allCodes.map(c => ({ category: c.category as import('../types').CostCodeCategory, budgeted: c.budgeted, actual: c.actual, notes: c.notes })),
+      driveTimeMinutes: driveTimeMin,
+      hoursPerVisit:    maintHrsPerVisit,
+      visitsPerMonth:   visitsPerMonth,
+      projections:      [],
+      notes:            '',
+      createdAt:        new Date().toISOString(),
+    };
+
+    const updatedData = existing
+      ? {
+          ...data,
+          contracts: data.contracts.map(c => c.id === quoteId ? contract : c),
+          jobs: [...(data.jobs ?? []), newJob],
+          jobCounter: jobCounter + 1,
+        }
+      : {
+          ...data,
+          estimateCounter: (data.estimateCounter ?? 7) + 1,
+          contracts: [...data.contracts, contract],
+          jobs: [...(data.jobs ?? []), newJob],
+          jobCounter: jobCounter + 1,
+        };
+    setData(updatedData); saveData(updatedData);
+    navigate(`/jobs`);
   }
 
   // ── Quote Totals calc ─────────────────────────────────────────────────────

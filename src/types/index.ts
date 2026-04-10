@@ -448,28 +448,74 @@ export interface SalesTaxRate {
   rate: number;      // percentage, e.g. 7.525
 }
 
-// ─── Job Costing Codes ─────────────────────────────────────────────────────────
-export type AccountingCodeCategory = 'labor' | 'materials' | 'subcontractor' | 'equipment' | 'other';
+// ─── Job Costing ──────────────────────────────────────────────────────────────
+export type CostCodeCategory = 'labor' | 'materials' | 'subcontractor' | 'equipment' | 'other';
 
-export const ACCOUNTING_CODE_LABELS: Record<AccountingCodeCategory, string> = {
+export const COST_CODE_LABELS: Record<CostCodeCategory, string> = {
   labor:         '1 - Labor',
   materials:     '2 - Materials',
   subcontractor: '3 - Subcontractor',
   equipment:     '4 - Equipment',
-  other:         '5 - Other',
+  other:         '5 - Other (Drive Time / Overhead)',
 };
 
-export interface AccountingCodeBucket {
-  category: AccountingCodeCategory;
-  budgeted: number;   // from estimate when job is activated
-  actual: number;     // logged over time
-  notes: string;
+export interface JobCostCode {
+  category:  CostCodeCategory;
+  budgeted:  number;   // original estimate value
+  actual:    number;   // sum of time entries + expenses posted to this code
+  notes:     string;
 }
 
-export interface JobCostingCodes {
-  maintenance: AccountingCodeBucket[];  // 5 buckets for lawn maintenance
-  snow: AccountingCodeBucket[];         // 5 buckets for snow (populated if snow items exist)
+export interface JobProjectionSnapshot {
+  id:            string;
+  postedAt:      string;   // ISO date
+  periodLabel:   string;   // e.g. "April 2026"
+  costCodes: {
+    category:        CostCodeCategory;
+    originalEstimate: number;
+    actualCost:       number;
+    remainingCost:    number;
+    projectedCost:    number;  // prorated by % of job timeline elapsed
+    marginPct:        number;
+  }[];
+  totalOriginal:   number;
+  totalActual:     number;
+  totalRemaining:  number;
+  totalProjected:  number;
+  projectedMargin: number;
+  invoicedToDate:  number;
+  notes:           string;
 }
+
+export type JobStatus = 'active' | 'on_hold' | 'completed' | 'cancelled';
+
+export interface Job {
+  id:              string;
+  jobNumber:       string;   // e.g. "J-001"
+  contractId:      string;   // source quote
+  clientId?:       string;
+  clientName:      string;
+  title:           string;
+  jobType:         'maintenance' | 'landscaping' | 'snow';
+  status:          JobStatus;
+  startDate:       string;   // YYYY-MM-DD
+  endDate:         string;   // YYYY-MM-DD
+  crewId?:         string;
+  costCodes:       JobCostCode[];
+  driveTimeMinutes: number;  // editable, defaults from quote miles
+  hoursPerVisit:   number;
+  visitsPerMonth:  number;
+  projections:     JobProjectionSnapshot[];
+  lastProjectionPrompt?: string;  // ISO date of last "post projection" prompt
+  notes:           string;
+  createdAt:       string;
+}
+
+// Legacy type kept for compat
+export type AccountingCodeCategory = CostCodeCategory;
+export const ACCOUNTING_CODE_LABELS = COST_CODE_LABELS;
+export interface AccountingCodeBucket { category: AccountingCodeCategory; budgeted: number; actual: number; notes: string; }
+export interface JobCostingCodes { maintenance: AccountingCodeBucket[]; snow: AccountingCodeBucket[]; }
 
 // ─── App Settings ─────────────────────────────────────────────────────────────
 export interface AppSettings {
@@ -528,8 +574,10 @@ export interface AppData {
   invoiceCounter: number;
   projectCounter: number;
   requestCounter: number;
+  jobCounter: number;
   requests: ServiceRequest[];
   salesTaxRates: SalesTaxRate[];
+  jobs: Job[];
 }
 
 // ─── Utility helpers ──────────────────────────────────────────────────────────

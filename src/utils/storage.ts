@@ -130,6 +130,8 @@ function applyMigrations(parsed: AppData): AppData {
     invoiceCounter:     parsed.invoiceCounter     ?? 1,
     projectCounter:     parsed.projectCounter     ?? 1,
     requestCounter:     parsed.requestCounter     ?? 0,
+    jobCounter:         parsed.jobCounter         ?? 1,
+    jobs:               parsed.jobs               ?? [],
     requests:           parsed.requests           ?? [],
     salesTaxRates:      parsed.salesTaxRates      ?? [],
   };

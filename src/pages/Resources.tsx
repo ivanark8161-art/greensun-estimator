@@ -783,14 +783,14 @@ function RatesTab({ data, setData }: Props) {
             const labelColor    = isMaint ? 'text-green-300' : 'text-blue-300';
             const valueColor    = isMaint ? 'text-green-400' : 'text-blue-400';
             const badgeColor    = isMaint ? 'bg-green-700/40 text-green-200' : 'bg-blue-700/40 text-blue-200';
-            const overheadPer   = activeCount > 0 ? totalOverhead / activeCount : 0;
-            const monthlyLabor  = laborPerVisit * visitsPerMonth;
-            const laborPer      = activeCount > 0 ? monthlyLabor / activeCount : 0;
+            const divisor       = activeCount > 0 ? activeCount * visitsPerMonth : 0;
+            const overheadPerVisit = divisor > 0 ? totalOverhead / divisor : 0;
+            const laborPerVisitCalc = laborPerVisit; // already per-visit
             return (
               <div className={`card bg-gray-900 text-white border ${accentColor}`}>
                 <div className="flex items-center justify-between mb-4">
                   <h3 className={`text-xs font-bold uppercase tracking-widest ${labelColor}`}>
-                    Cost Per Active Contract
+                    Overhead Per Visit (Spread Across Contracts)
                   </h3>
                   <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${badgeColor}`}>
                     {activeCount} Active {activeCount === 1 ? 'Contract' : 'Contracts'}
@@ -799,25 +799,25 @@ function RatesTab({ data, setData }: Props) {
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between items-center py-1.5 border-b border-white/10">
                     <div>
-                      <p className="font-medium">Labor</p>
-                      <p className="text-xs text-gray-400">{formatCurrency(monthlyLabor)}/mo ÷ {activeCount} contracts</p>
+                      <p className="font-medium">Labor / Visit</p>
+                      <p className="text-xs text-gray-400">{formatCurrency(blendedRate)}/hr × crew hours</p>
                     </div>
-                    <p className={`font-semibold ${valueColor}`}>{activeCount > 0 ? formatCurrency(laborPer) : '—'}</p>
+                    <p className={`font-semibold ${valueColor}`}>{laborPerVisitCalc > 0 ? formatCurrency(laborPerVisitCalc) : '—'}</p>
                   </div>
                   <div className="flex justify-between items-center py-1.5 border-b border-white/10">
                     <div>
-                      <p className="font-medium">Fixed Overhead</p>
-                      <p className="text-xs text-gray-400">{formatCurrency(totalOverhead)}/mo ÷ {activeCount} contracts</p>
+                      <p className="font-medium">Overhead / Visit</p>
+                      <p className="text-xs text-gray-400">{formatCurrency(totalOverhead)}/mo ÷ ({activeCount} contracts × {visitsPerMonth} visits)</p>
                     </div>
-                    <p className={`font-semibold ${valueColor}`}>{activeCount > 0 ? formatCurrency(overheadPer) : '—'}</p>
+                    <p className={`font-semibold ${valueColor}`}>{divisor > 0 ? formatCurrency(overheadPerVisit) : '—'}</p>
                   </div>
                   <div className="flex justify-between items-center pt-3 border-t border-white/20">
-                    <p className="font-bold">Total Per Contract</p>
-                    <p className={`text-lg font-bold ${valueColor}`}>{activeCount > 0 ? formatCurrency(laborPer + overheadPer) : '—'}</p>
+                    <p className="font-bold">Total / Visit (add to catalog)</p>
+                    <p className={`text-lg font-bold ${valueColor}`}>{divisor > 0 ? formatCurrency(laborPerVisitCalc + overheadPerVisit) : '—'}</p>
                   </div>
                 </div>
                 {activeCount === 0 && (
-                  <p className="text-xs text-gray-500 mt-2 italic">No active contracts found — add contracts with status "Active" to see per-contract costs.</p>
+                  <p className="text-xs text-gray-500 mt-2 italic">No active contracts — set contracts to "Active" status to calculate overhead spread.</p>
                 )}
               </div>
             );

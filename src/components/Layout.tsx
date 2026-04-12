@@ -20,22 +20,21 @@ const NAV_GROUPS = [
   {
     label: 'Work',
     items: [
-      { to: '/projects',  label: 'Landscaping',   icon: '🌿' },
-      { to: '/jobs',      label: 'Job Costing',   icon: '🏗' },
+      { to: '/jobs',      label: 'Jobs',          icon: '🏗' },
     ],
   },
   {
     label: 'Financial',
     items: [
       { to: '/invoices',  label: 'Invoices',      icon: '💰' },
-      { to: '/snow',      label: 'Snow Removal',  icon: '❄' },
     ],
   },
   {
     label: 'Operations',
     items: [
-      { to: '/time',      label: 'Time Tracking', icon: '⏱' },
-      { to: '/expenses',  label: 'Expenses',      icon: '🧾' },
+      { to: '/time',      label: 'Time Tracking',    icon: '⏱' },
+      { to: '/expenses',  label: 'Expenses',          icon: '🧾' },
+      { to: '/snow',      label: 'Snow Trip Tracker', icon: '❄' },
     ],
   },
   {
@@ -96,9 +95,16 @@ export default function Layout() {
           ))}
         </nav>
 
-        {open && (
-          <div className="px-4 py-3 border-t border-white/10 text-xs text-gray-600">GreenSun Landscapes</div>
-        )}
+        <div className={`px-4 py-3 border-t border-white/10 text-xs text-gray-600 ${open ? '' : 'flex justify-center'}`}>
+          {open ? (
+            <div>
+              <p className="text-gray-500 font-medium">GreenSun Landscapes</p>
+              <p className="text-gray-700 mt-0.5">v{__APP_VERSION__} · {__BUILD_DATE__}</p>
+            </div>
+          ) : (
+            <span title={`v${__APP_VERSION__} · ${__BUILD_DATE__}`} className="text-gray-700 text-[10px] font-mono">v{__APP_VERSION__}</span>
+          )}
+        </div>
       </aside>
 
       {/* Main content */}

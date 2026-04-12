@@ -449,7 +449,7 @@ const [visitsPerMonth, setVisitsPerMonth] = useState(editingContract?.visitsPerM
       };
       updated = { ...data, contracts: data.contracts.map(c => c.id === contract.id ? contract : c) };
     } else {
-      const counter = (data.estimateCounter || 6) + 1;
+      const counter = (data.estimateCounter ?? 7) + 1;
       contract = {
         id: `c_${Date.now()}`,
         estimateNumber: generateEstimateNumber(counter),

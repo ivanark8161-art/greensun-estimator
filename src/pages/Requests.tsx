@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { AppData, ServiceRequest, RequestStatus } from '../types';
 import { saveData } from '../utils/storage';
 import { generateRequestNumber } from '../utils/calculations';
@@ -34,16 +34,35 @@ function uid() { return `req_${Date.now()}_${Math.random().toString(36).slice(2,
 
 export default function Requests({ data, setData }: Props) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [showNew, setShowNew] = useState(false);
   const [statusFilter, setStatusFilter] = useState<RequestStatus | 'all'>('all');
 
+  // ── Pre-fill from client when navigated via ?clientId= ─────────────────────
+  const fromClientId = searchParams.get('clientId');
+  const fromClient   = fromClientId ? data.clients.find(c => c.id === fromClientId) : null;
+  const fromContact  = fromClient ? (fromClient.contacts?.find(ct => ct.isPrimary) ?? fromClient.contacts?.[0]) : null;
+  const fromProp     = fromClient ? (fromClient.properties?.find(p => p.isBillingAddress) ?? fromClient.properties?.[0]) : null;
+
   // ── New request form state ──────────────────────────────────────────────────
   const [form, setForm] = useState({
-    title: '', clientName: '', contactName: '', phone: '', email: '',
-    propertyAddress: '', city: '', state: '', zip: '',
-    propertyType: 'commercial' as 'commercial' | 'residential',
+    title: '',
+    clientName: fromClient ? (fromClient.companyName ?? fromClient.name ?? '') : '',
+    contactName: fromContact ? `${fromContact.firstName} ${fromContact.lastName}`.trim() : '',
+    phone: fromContact?.phone ?? '',
+    email: fromContact?.email ?? '',
+    propertyAddress: fromProp?.street1 ?? '',
+    city: fromProp?.city ?? '',
+    state: fromProp?.state ?? '',
+    zip: fromProp?.zip ?? '',
+    propertyType: (fromClient?.type ?? 'commercial') as 'commercial' | 'residential',
     source: '', serviceDetails: '', estimatedValue: 0,
   });
+
+  // Auto-open modal when navigated with ?clientId=
+  useEffect(() => {
+    if (fromClientId) setShowNew(true);
+  }, [fromClientId]);
 
   function createRequest() {
     if (!form.clientName.trim()) { alert('Client name is required'); return; }
@@ -53,6 +72,7 @@ export default function Requests({ data, setData }: Props) {
       requestNumber: generateRequestNumber(counter),
       title: form.title || form.clientName,
       clientName: form.clientName.trim(),
+      clientId: fromClientId ?? undefined,
       contactName: form.contactName,
       phone: form.phone,
       email: form.email,

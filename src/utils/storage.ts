@@ -3,10 +3,25 @@ import { DEFAULT_DATA } from '../data/defaults';
 import { getAuthHeaders } from './auth';
 
 const STORAGE_KEY = 'greensun_app_data';
-const SERVER_URL  = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:3001';
+// Electron connects to the local server; web uses relative URLs (same origin).
+const _isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron;
+const SERVER_URL  = import.meta.env.VITE_API_URL ?? (_isElectron ? 'http://127.0.0.1:3001' : '');
+
+// ── Collections stored as per-document in MongoDB ─────────────────────────────
+const ARRAY_COLLECTIONS = [
+  'clients','contracts','jobs','invoices','snowTrips','timeEntries','expenses',
+  'employees','equipment','overhead','fieldSupplies','subcontractors','crews',
+  'projects','requests','leads','futureBudget','contractTemplates',
+  'salesTaxRates','serviceCatalog',
+] as const;
+
+const COUNTER_KEYS = [
+  'estimateCounter','invoiceCounter','projectCounter',
+  'requestCounter','jobCounter','snowTripCounter',
+] as const;
+
 
 // ── Migration / hydration logic ───────────────────────────────────────────────
-// Shared by both loadData() (sync, from localStorage) and loadFromServer() (async, from file).
 function applyMigrations(parsed: AppData): AppData {
   const equipment = (parsed.equipment ?? DEFAULT_DATA.equipment).map(e => ({
     monthlyMaintenancePct: 5,
@@ -72,10 +87,23 @@ function applyMigrations(parsed: AppData): AppData {
       ...parsed.settings,
       snowPlowHrsPerKSFPerInch:     0.01515,
       snowSidewalkHrsPerKSFPerInch: 0.1111,
-      snowEvents1_5in:    parsed.settings?.snowEvents1_5in    ?? 10,
-      snowEvents4in:      parsed.settings?.snowEvents4in      ?? 5,
+      snowEvents1_5in:     parsed.settings?.snowEvents1_5in    ?? 10,
+      snowEvents4in:       parsed.settings?.snowEvents4in      ?? 5,
+      snowEventsDusting:   parsed.settings?.snowEventsDusting  ?? 8,
       snowEffSFPerHr1_5in: parsed.settings?.snowEffSFPerHr1_5in ?? 44000,
       snowEffSFPerHr4in:   parsed.settings?.snowEffSFPerHr4in   ?? 30000,
+      snowPlow4inHrs:        parsed.settings?.snowPlow4inHrs        ?? 4,
+      snowPlow4inSF:         parsed.settings?.snowPlow4inSF         ?? 66000,
+      snowShovel4inHrs:      parsed.settings?.snowShovel4inHrs      ?? 4.5,
+      snowShovel4inSF:       parsed.settings?.snowShovel4inSF       ?? 7000,
+      snowPlow1_5inHrs:      parsed.settings?.snowPlow1_5inHrs      ?? 2,
+      snowPlow1_5inSF:       parsed.settings?.snowPlow1_5inSF       ?? 66000,
+      snowShovel1_5inHrs:    parsed.settings?.snowShovel1_5inHrs    ?? 1.5,
+      snowShovel1_5inSF:     parsed.settings?.snowShovel1_5inSF     ?? 7000,
+      snowPlowDustingHrs:    parsed.settings?.snowPlowDustingHrs    ?? 1,
+      snowPlowDustingSF:     parsed.settings?.snowPlowDustingSF     ?? 66000,
+      snowShovelDustingHrs:  parsed.settings?.snowShovelDustingHrs  ?? 1,
+      snowShovelDustingSF:   parsed.settings?.snowShovelDustingSF   ?? 7000,
       fuelCostPerGallon:   parsed.settings?.fuelCostPerGallon   ?? 3.50,
       vehicleMpg:          parsed.settings?.vehicleMpg          ?? 12,
     },
@@ -84,7 +112,7 @@ function applyMigrations(parsed: AppData): AppData {
     contracts,
     clients: (parsed.clients ?? DEFAULT_DATA.clients).map(c => {
       const hasNew = !!(c.companyName || c.contacts?.length || c.properties?.length);
-      if (hasNew) return { ...c, contacts: c.contacts ?? [], properties: c.properties ?? [], leadSource: (c.leadSource ?? '') as import('../types').LeadSource, tags: c.tags ?? [] };
+      if (hasNew) return { ...c, contacts: c.contacts ?? [], properties: (c.properties ?? []).map((p: any) => ({ name: '', ...p })), leadSource: (c.leadSource ?? '') as import('../types').LeadSource, tags: c.tags ?? [] };
       const contactId = `${c.id}_c1`;
       const propId = `${c.id}_p1`;
       const nameParts = (c.contactName || '').trim().split(' ');
@@ -104,6 +132,7 @@ function applyMigrations(parsed: AppData): AppData {
         }] : [],
         properties: [{
           id: propId,
+          name: '',
           street1: c.billingAddress || '',
           street2: '',
           city: c.city || '',
@@ -121,7 +150,7 @@ function applyMigrations(parsed: AppData): AppData {
     }),
     leads:              parsed.leads              ?? [],
     projects:           parsed.projects           ?? [],
-    snowTrips:          parsed.snowTrips          ?? [],
+    snowTrips:          (parsed.snowTrips ?? []).filter(t => !!(t as { jobId?: string }).jobId),
     invoices:           parsed.invoices           ?? [],
     timeEntries:        parsed.timeEntries        ?? [],
     expenses:           parsed.expenses           ?? [],
@@ -131,9 +160,12 @@ function applyMigrations(parsed: AppData): AppData {
     projectCounter:     parsed.projectCounter     ?? 1,
     requestCounter:     parsed.requestCounter     ?? 0,
     jobCounter:         parsed.jobCounter         ?? 1,
+    snowTripCounter:    parsed.snowTripCounter    ?? 1,
     jobs:               parsed.jobs               ?? [],
     requests:           parsed.requests           ?? [],
     salesTaxRates:      parsed.salesTaxRates      ?? [],
+    subcontractors:     parsed.subcontractors     ?? [],
+    savedAt:            parsed.savedAt            ?? undefined,
   };
 }
 
@@ -149,25 +181,124 @@ export function loadData(): AppData {
   }
 }
 
+// Synchronous local-only save — keeps localStorage in sync immediately.
 export function saveData(data: AppData): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  // Fire-and-forget to file — silently ignored if server isn't running
-  fetch(`${SERVER_URL}/api/data`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(data),
-  }).catch(() => {});
+  const stamped = { ...data, savedAt: new Date().toISOString() };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(stamped));
+}
+
+// ── Diff-based save: send only what changed to the server ─────────────────────
+export async function saveChangesAsync(prev: AppData, next: AppData): Promise<boolean> {
+  // Always update localStorage immediately (offline safety)
+  saveData(next);
+
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(getAuthHeaders() as Record<string, string>),
+    };
+    const reqs: Promise<Response>[] = [];
+
+    // Array collections — upsert changed items, delete removed items
+    for (const col of ARRAY_COLLECTIONS) {
+      const prevArr = ((prev[col as keyof AppData] ?? []) as { id: string }[]);
+      const nextArr = ((next[col as keyof AppData] ?? []) as { id: string }[]);
+
+      const prevById = new Map(prevArr.map(i => [i.id, i]));
+      const nextById = new Map(nextArr.map(i => [i.id, i]));
+
+      for (const [id, item] of nextById) {
+        const p = prevById.get(id);
+        if (!p || JSON.stringify(p) !== JSON.stringify(item)) {
+          reqs.push(fetch(`${SERVER_URL}/api/${col}/${encodeURIComponent(id)}`, {
+            method: 'PUT', headers, body: JSON.stringify(item),
+          }));
+        }
+      }
+      for (const [id] of prevById) {
+        if (!nextById.has(id)) {
+          reqs.push(fetch(`${SERVER_URL}/api/${col}/${encodeURIComponent(id)}`, {
+            method: 'DELETE', headers,
+          }));
+        }
+      }
+    }
+
+    // Settings
+    if (JSON.stringify(prev.settings) !== JSON.stringify(next.settings)) {
+      reqs.push(fetch(`${SERVER_URL}/api/settings`, {
+        method: 'PATCH', headers, body: JSON.stringify(next.settings),
+      }));
+    }
+
+    // Counters
+    const counterChanged = COUNTER_KEYS.some(k => prev[k as keyof AppData] !== next[k as keyof AppData]);
+    if (counterChanged) {
+      const counters = Object.fromEntries(COUNTER_KEYS.map(k => [k, next[k as keyof AppData]]));
+      reqs.push(fetch(`${SERVER_URL}/api/counters`, {
+        method: 'PATCH', headers, body: JSON.stringify(counters),
+      }));
+    }
+
+    if (reqs.length === 0) return true;
+    const results = await Promise.all(reqs);
+    return results.every(r => r.ok);
+  } catch {
+    return false;
+  }
+}
+
+// ── SSE real-time subscription ────────────────────────────────────────────────
+export interface SSEEvent {
+  type?: string;
+  collection?: string;
+  operation?: string;
+  doc?: Record<string, unknown>;
+  docId?: string;
+}
+
+export function subscribeToStream(onEvent: (e: SSEEvent) => void): () => void {
+  const authHeaders = getAuthHeaders() as Record<string, string>;
+  const token = (authHeaders['Authorization'] ?? '').replace('Bearer ', '').trim();
+  const url = `${SERVER_URL}/api/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+
+  let es: EventSource | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+
+  function connect() {
+    if (closed) return;
+    try {
+      es = new EventSource(url);
+      es.onmessage = ev => {
+        try { onEvent(JSON.parse(ev.data) as SSEEvent); } catch { /* ignore */ }
+      };
+      es.onerror = () => {
+        es?.close();
+        es = null;
+        if (!closed) retryTimer = setTimeout(connect, 5000);
+      };
+    } catch {
+      if (!closed) retryTimer = setTimeout(connect, 5000);
+    }
+  }
+
+  connect();
+
+  return () => {
+    closed = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    es?.close();
+  };
 }
 
 // Fetch from server, apply migrations, return hydrated data.
-// Returns null if server is unreachable or data is empty/meaningless.
 export async function loadFromServer(): Promise<AppData | null> {
   try {
-    const res = await fetch(`${SERVER_URL}/api/data`, { headers: { ...getAuthHeaders() } });
+    const res = await fetch(`${SERVER_URL}/api/data`, { headers: { ...(getAuthHeaders() as Record<string, string>) } });
     if (!res.ok) return null;
     const raw = await res.json() as AppData;
     if (!raw || Object.keys(raw).length === 0) return null;
-    // If server has data but all key arrays are empty, treat as blank slate
     const hasContent = (raw.employees?.length ?? 0) > 0
       || (raw.contracts?.length ?? 0) > 0
       || (raw.equipment?.length ?? 0) > 0;
@@ -196,10 +327,16 @@ export function exportData(): void {
 export function importData(file: File): Promise<AppData> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const data = JSON.parse(e.target?.result as string) as AppData;
         saveData(data);
+        // Push the full import to the server via writeAppData (POST /api/data)
+        await fetch(`${SERVER_URL}/api/data`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(getAuthHeaders() as Record<string, string>) },
+          body: JSON.stringify(data),
+        });
         resolve(data);
       } catch {
         reject(new Error('Invalid backup file'));
@@ -208,4 +345,20 @@ export function importData(file: File): Promise<AppData> {
     reader.onerror = () => reject(new Error('Failed to read file'));
     reader.readAsText(file);
   });
+}
+
+// Legacy export — kept so any remaining callers don't break at compile time.
+// New code should use saveChangesAsync(prev, next) instead.
+export async function saveDataAsync(data: AppData): Promise<boolean> {
+  saveData(data);
+  try {
+    const res = await fetch(`${SERVER_URL}/api/data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(getAuthHeaders() as Record<string, string>) },
+      body: JSON.stringify(data),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }

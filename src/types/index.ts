@@ -66,6 +66,7 @@ export interface ClientContact {
 
 export interface ClientProperty {
   id: string;
+  name: string;           // e.g. "Main Office", "Parking Lot", "Back Entrance"
   street1: string;
   street2: string;
   city: string;
@@ -166,7 +167,7 @@ export interface FieldSupply {
 
 // ─── Contracts ───────────────────────────────────────────────────────────────
 export type PropertyType = 'commercial' | 'residential';
-export type ContractStatus = 'estimate' | 'draft' | 'awaiting_response' | 'changes_requested' | 'approved' | 'active' | 'closed' | 'lost';
+export type ContractStatus = 'estimate' | 'draft' | 'awaiting_response' | 'changes_requested' | 'approved' | 'active' | 'closed' | 'lost' | 'converted' | 'rejected';
 
 export const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'] as const;
 export type Month = typeof MONTHS[number];
@@ -220,30 +221,30 @@ export interface Contract {
   notes: string;
   terms: string;
   createdAt: string;
+  // Revision chain
+  revisionOf?: string;       // id of the parent quote this was revised from
+  revisionNumber?: number;   // 1 = first revision, 2 = second, etc.
 }
 
 // ─── Snow Removal ─────────────────────────────────────────────────────────────
 export interface SnowTrip {
   id: string;
-  contractId?: string;
+  jobId: string;           // links to Job (jobType === 'snow')
+  clientId?: string;
   clientName: string;
   propertyAddress: string;
-  date: string;
+  serviceDate: string;     // YYYY-MM-DD
   snowfallInches: number;
+  onSiteHours: number;     // total time on property
   plowingHours: number;
-  plowingRate: number;
-  plowingCostRate: number;
   shovelingHours: number;
-  shovelingRate: number;
-  shovelingCostRate: number;
-  deicingBags: number;
-  deicingRate: number;
-  deicingCostRate: number;
+  deicingBags: number;     // qty; cost rate pulled from settings
+  equipmentIds: string[];  // from Equipment resources
+  employeeIds: string[];   // from Employee resources
   notes: string;
-  totalRevenue: number;
-  totalCost: number;
   status: 'logged' | 'invoiced' | 'paid';
   invoiceId?: string;
+  createdAt: string;
 }
 
 // ─── Invoices ────────────────────────────────────────────────────────────────
@@ -335,6 +336,19 @@ export interface TimeEntry {
   hours: number;
   notes: string;
   createdAt: string;
+}
+
+// ─── Subcontractors ───────────────────────────────────────────────────────────
+export interface Subcontractor {
+  id: string;
+  companyName: string;
+  contactName: string;
+  phone: string;
+  email: string;
+  specialty: string;
+  rateType: 'hourly' | 'daily' | 'project';
+  rate: number;
+  notes: string;
 }
 
 // ─── Expenses ─────────────────────────────────────────────────────────────────
@@ -545,8 +559,22 @@ export interface AppSettings {
   snowPlowHrsPerKSFPerInch: number;     // plowing efficiency (hrs per 1,000 SF per inch of snow)
   snowEvents1_5in: number;          // # of events ≥1.5" per season (historical avg)
   snowEvents4in: number;            // # of events ≥4" per season (historical avg)
+  snowEventsDusting: number;        // # of dusting/drift events (<1.5") per season
   snowEffSFPerHr1_5in: number;      // SF cleared per hour at 1.5" depth
   snowEffSFPerHr4in: number;        // SF cleared per hour at 4" depth
+  // Snow efficiency tiers — editable SF and hours benchmarks
+  snowPlow4inHrs: number;           // plowing hrs for 4"+ events
+  snowPlow4inSF: number;            // SF of drivelanes/lots cleared in that time
+  snowShovel4inHrs: number;         // shoveling hrs for 4"+ events
+  snowShovel4inSF: number;          // SF of sidewalks cleared in that time
+  snowPlow1_5inHrs: number;
+  snowPlow1_5inSF: number;
+  snowShovel1_5inHrs: number;
+  snowShovel1_5inSF: number;
+  snowPlowDustingHrs: number;
+  snowPlowDustingSF: number;
+  snowShovelDustingHrs: number;
+  snowShovelDustingSF: number;
   fuelCostPerGallon: number;        // $/gallon for drive time fuel cost
   vehicleMpg: number;               // miles per gallon for service vehicle
 }
@@ -557,6 +585,7 @@ export interface AppData {
   employees: Employee[];
   overhead: OverheadItem[];
   fieldSupplies: FieldSupply[];
+  subcontractors: Subcontractor[];
   serviceCatalog: ServiceCatalogItem[];
   clients: Client[];
   leads: PipelineLead[];
@@ -575,9 +604,11 @@ export interface AppData {
   projectCounter: number;
   requestCounter: number;
   jobCounter: number;
+  snowTripCounter: number;
   requests: ServiceRequest[];
   salesTaxRates: SalesTaxRate[];
   jobs: Job[];
+  savedAt?: string;   // ISO timestamp — set on every saveData() call, used to pick the newer copy
 }
 
 // ─── Utility helpers ──────────────────────────────────────────────────────────

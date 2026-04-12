@@ -338,9 +338,13 @@ function RevenueForecastReport({ data }: Props) {
     .reduce((s, l) => s + l.estimatedValue, 0);
 
   // Snow forecast: avg trips per month × avg trip revenue
-  const snowRevenue = data.snowTrips.reduce((s, t) => s + t.totalRevenue, 0);
+  const { plowingRatePerHour, shovelingRatePerHour, deicingRatePerBag } = data.settings;
+  const snowRevenue = data.snowTrips.reduce((s, t) =>
+    s + (t.plowingHours * plowingRatePerHour)
+      + (t.shovelingHours * shovelingRatePerHour)
+      + (t.deicingBags * deicingRatePerBag), 0);
   const snowMonths  = data.snowTrips.length > 0
-    ? new Set(data.snowTrips.map(t => t.date.slice(0, 7))).size
+    ? new Set(data.snowTrips.map(t => t.serviceDate.slice(0, 7))).size
     : 0;
   const avgSnowPerMonth = snowMonths > 0 ? snowRevenue / snowMonths : 0;
 

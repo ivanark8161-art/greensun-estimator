@@ -1,11 +1,123 @@
-import { useState } from 'react';
-import type { AppData, Job, JobCostCode, JobProjectionSnapshot, CostCodeCategory } from '../types';
+import { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import type {
+  AppData, Job, JobCostCode, JobProjectionSnapshot, CostCodeCategory,
+  LandscapingProject, ProjectStatus, Contract, EstimateLineItem,
+} from '../types';
 import { COST_CODE_LABELS } from '../types';
+import { calcLineItemTotals as calcLIT } from '../types';
 import { saveData } from '../utils/storage';
+import {
+  formatCurrency, formatPercent,
+  calcJobCostingForProject, generateProjectNumber,
+} from '../utils/calculations';
+import Modal from '../components/Modal';
 
 interface Props { data: AppData; setData: (d: AppData) => void; }
+type MainTab = 'maintenance' | 'landscaping';
 
-const COST_CODE_CATEGORIES: CostCodeCategory[] = ['labor', 'materials', 'subcontractor', 'equipment', 'other'];
+// ─── Snow classifier (mirrors QuoteDetail) ────────────────────────────────────
+const SNOW_IDS = new Set(['svc16','svc17','svc18','svc19','svc20','snow_trip']);
+function isSnowItem(i: EstimateLineItem) {
+  return SNOW_IDS.has(i.catalogItemId ?? '') || i.isSnowPerTrip === true;
+}
+
+// ─── Drill-down builder ───────────────────────────────────────────────────────
+interface DrillLine { label: string; amount: number; }
+
+function buildDrillDown(
+  category: CostCodeCategory,
+  job: Job,
+  contract: Contract,
+  data: AppData,
+): DrillLine[] {
+  const s = data.settings;
+  const burden = 1 + (s.payrollBurdenPercent ?? 0) / 100;
+  const crew = job.crewId ? data.crews.find(c => c.id === job.crewId) : null;
+  const blendedRate = crew && crew.memberIds.length > 0
+    ? data.employees.filter(e => crew.memberIds.includes(e.id)).reduce((sum, e) => sum + e.hourlyRate * burden, 0)
+    : (s.laborRatePerHour ?? 22) * burden;
+
+  const activeItems  = contract.lineItems.filter(i => !i.optional);
+  const maintItems   = activeItems.filter(i => !isSnowItem(i) && !i.isOneTime);
+  const snowItems    = activeItems.filter(i => isSnowItem(i));
+  const activeMonths = contract.activeMonths?.length ?? 9;
+  const totalVisits  = job.visitsPerMonth * activeMonths;
+  const totalSnowEvents = (s.snowEvents4in ?? 5) + (s.snowEvents1_5in ?? 10) + (s.snowEventsDusting ?? 8);
+
+  if (category === 'labor') {
+    const lines: DrillLine[] = [];
+    maintItems.forEach(li => {
+      const hrs = li.estimatedHours ?? 0;
+      if (hrs <= 0) return;
+      lines.push({
+        label: `${li.name}: ${hrs.toFixed(2)} hrs/visit × ${totalVisits} visits @ $${blendedRate.toFixed(0)}/hr`,
+        amount: hrs * totalVisits * blendedRate,
+      });
+    });
+    if (job.driveTimeMinutes > 0) {
+      const dtHrs = job.driveTimeMinutes / 60;
+      lines.push({
+        label: `Drive time: ${job.driveTimeMinutes} min/visit × ${totalVisits} visits @ $${blendedRate.toFixed(0)}/hr`,
+        amount: dtHrs * totalVisits * blendedRate,
+      });
+    }
+    if (snowItems.length > 0) {
+      const snowHrsPerEvent = snowItems.reduce((sum, i) => sum + (i.estimatedHours ?? 0), 0);
+      if (snowHrsPerEvent > 0) {
+        lines.push({
+          label: `Snow labor: ${snowHrsPerEvent.toFixed(1)} hrs/event × ${totalSnowEvents} events @ $${blendedRate.toFixed(0)}/hr`,
+          amount: snowHrsPerEvent * totalSnowEvents * blendedRate,
+        });
+      }
+    }
+    return lines;
+  }
+
+  if (category === 'materials') {
+    const lines: DrillLine[] = [];
+    const matItems = maintItems.filter(i => !(i.estimatedHours ?? 0) && i.unitCost > 0);
+    matItems.forEach(li => {
+      lines.push({
+        label: `${li.name}: ${li.qty} × $${li.unitCost.toFixed(2)} × ${activeMonths} mo`,
+        amount: li.qty * li.unitCost * activeMonths,
+      });
+    });
+    if (snowItems.length > 0) {
+      const bagsPerTrip = 3;
+      lines.push({
+        label: `De-icing: ${totalSnowEvents} trips × ${bagsPerTrip} bags × $${(s.deicingCostPerBag ?? 15).toFixed(2)}/bag`,
+        amount: totalSnowEvents * bagsPerTrip * (s.deicingCostPerBag ?? 15),
+      });
+    }
+    return lines;
+  }
+
+  if (category === 'equipment') {
+    const lines: DrillLine[] = [];
+    const addEquipLines = (items: EstimateLineItem[], months: number, label: string) => {
+      items.forEach(li => {
+        if (!li.catalogItemId) return;
+        const svc = data.serviceCatalog.find(sv => sv.id === li.catalogItemId);
+        if (!svc?.equipmentIds?.length) return;
+        svc.equipmentIds.forEach(eid => {
+          const eq = data.equipment.find(e => e.id === eid);
+          if (!eq) return;
+          const mo = eq.paymentType === 'monthly_payment' ? eq.monthlyPaymentAmount : eq.monthlyDepreciation;
+          lines.push({
+            label: `${eq.name} (${li.name}): $${mo.toFixed(0)}/mo × ${months} mo${label}`,
+            amount: mo * months,
+          });
+        });
+      });
+    };
+    addEquipLines(maintItems, activeMonths, '');
+    addEquipLines(snowItems, 5, ' snow');
+    return lines;
+  }
+
+  return [];
+}
 
 function fmt(n: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
@@ -14,16 +126,17 @@ function fmtDec(n: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 }
 
-// Maintenance season: Apr–Oct; Snow: Nov–Mar
-function seasonMonthsRemaining(job: Job): number {
-  const today = new Date();
-  const end = new Date(job.endDate);
-  if (end <= today) return 0;
-  const start = today > new Date(job.startDate) ? today : new Date(job.startDate);
-  const months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
-  return Math.max(0, months);
-}
+// ─── Status configs ────────────────────────────────────────────────────────────
+const PROJ_STATUS_BADGE: Record<ProjectStatus, string> = {
+  estimate: 'badge-yellow', approved: 'badge-blue', in_progress: 'badge-purple',
+  completed: 'badge-green', invoiced: 'badge-gray', lost: 'badge-red',
+};
+const PROJ_STATUS_LABELS: Record<ProjectStatus, string> = {
+  estimate: 'Estimate', approved: 'Approved', in_progress: 'In Progress',
+  completed: 'Completed', invoiced: 'Invoiced', lost: 'Lost',
+};
 
+// ─── Projection helpers ────────────────────────────────────────────────────────
 function pctElapsed(job: Job): number {
   const start = new Date(job.startDate).getTime();
   const end   = new Date(job.endDate).getTime();
@@ -70,21 +183,350 @@ function buildProjection(job: Job, invoicedToDate: number, notes: string): JobPr
   };
 }
 
-export default function Jobs({ data, setData }: Props) {
+// ─── Blank project ─────────────────────────────────────────────────────────────
+function blankProject(): Omit<LandscapingProject, 'id' | 'projectNumber' | 'createdAt'> {
+  return {
+    clientId: undefined, clientName: '', address: '', description: '',
+    status: 'approved', startDate: '', endDate: '',
+    estimatedHours: 0, estimatedMaterialCost: 0,
+    lineItems: [], subtotalRevenue: 0, totalCost: 0, grossMargin: 0,
+    crewId: undefined, notes: '',
+  };
+}
+
+// ─── Landscaping Projects Tab ─────────────────────────────────────────────────
+function LandscapingTab({ data, setData, openProjectId }: Props & { openProjectId?: string }) {
+  const [showModal, setShowModal]     = useState(false);
+  const initProject = openProjectId ? (data.projects.find(p => p.id === openProjectId) ?? null) : null;
+  const [viewProject, setViewProject] = useState<LandscapingProject | null>(initProject);
+  const [editing, setEditing]         = useState<LandscapingProject | null>(null);
+  const [form, setForm]               = useState(blankProject());
+  const [showArchived, setShowArchived] = useState(false);
+
+  function open(p?: LandscapingProject) {
+    if (p) { setEditing(p); setForm({ ...p }); }
+    else   { setEditing(null); setForm(blankProject()); }
+    setShowModal(true);
+  }
+
+  function save() {
+    if (!form.clientName.trim()) { alert('Client name required'); return; }
+    const now = new Date().toISOString();
+    let updated: AppData;
+    if (editing) {
+      updated = { ...data, projects: data.projects.map(p => p.id === editing.id ? { ...p, ...form } : p) };
+    } else {
+      const pn = generateProjectNumber(data.projectCounter);
+      updated = {
+        ...data,
+        projectCounter: data.projectCounter + 1,
+        projects: [...data.projects, { id: `proj_${Date.now()}`, projectNumber: pn, ...form, createdAt: now }],
+      };
+    }
+    setData(updated); saveData(updated); setShowModal(false);
+  }
+
+  function del(id: string) {
+    if (!confirm('Delete this project?')) return;
+    const updated = { ...data, projects: data.projects.filter(p => p.id !== id) };
+    setData(updated); saveData(updated); setViewProject(null);
+  }
+
+  function updateStatus(id: string, status: ProjectStatus) {
+    const updated = { ...data, projects: data.projects.map(p => p.id === id ? { ...p, status } : p) };
+    setData(updated); saveData(updated);
+    setViewProject(prev => prev?.id === id ? { ...prev, status } : prev);
+  }
+
+  function addLineItem() {
+    const item: EstimateLineItem = {
+      id: `li_${Date.now()}`, name: '', description: '', qty: 1, unit: 'each',
+      unitCost: 0, unitPrice: 0, optional: false, taxable: false, notes: '',
+    };
+    const items = [...form.lineItems, item];
+    setForm({ ...form, lineItems: items, ...calcLIT(items) });
+  }
+
+  function updateLineItem(idx: number, field: keyof EstimateLineItem, value: string | number | boolean) {
+    const items = form.lineItems.map((li, i) => i === idx ? { ...li, [field]: value } : li);
+    setForm({ ...form, lineItems: items, ...calcLIT(items) });
+  }
+
+  function removeLineItem(idx: number) {
+    const items = form.lineItems.filter((_, i) => i !== idx);
+    setForm({ ...form, lineItems: items, ...calcLIT(items) });
+  }
+
+  const activeProjects   = data.projects.filter(p => ['approved','in_progress','completed'].includes(p.status));
+  const archivedProjects = data.projects.filter(p => p.status === 'invoiced');
+  const totalValue       = activeProjects.reduce((s, p) => s + p.subtotalRevenue, 0);
+
+  function ProjectRow({ p, archived = false }: { p: LandscapingProject; archived?: boolean }) {
+    const jc = calcJobCostingForProject(p, data);
+    return (
+      <tr className={`hover:bg-gray-50 cursor-pointer ${archived ? 'opacity-60' : ''}`} onClick={() => setViewProject(p)}>
+        <td className="px-4 py-3 text-gray-400 font-mono text-xs">{p.projectNumber}</td>
+        <td className="px-4 py-3">
+          <p className="font-semibold text-gray-900">{p.clientName}</p>
+          <p className="text-xs text-gray-400">{p.address}</p>
+        </td>
+        <td className="px-4 py-3 text-gray-600 max-w-xs truncate">{p.description}</td>
+        <td className="px-4 py-3 font-semibold text-[#27AE60]">{formatCurrency(p.subtotalRevenue)}</td>
+        <td className="px-4 py-3 text-amber-600">{formatCurrency(jc.estimatedCost)}</td>
+        <td className={`px-4 py-3 font-medium ${p.grossMargin >= data.settings.targetMargin ? 'text-green-600' : 'text-yellow-600'}`}>
+          {formatPercent(p.grossMargin)}
+        </td>
+        <td className="px-4 py-3">
+          <span className={PROJ_STATUS_BADGE[p.status]}>{PROJ_STATUS_LABELS[p.status]}</span>
+        </td>
+        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+          <button className="text-xs text-[#27AE60] hover:underline" onClick={() => open(p)}>Edit</button>
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <div className="text-sm text-gray-600">
+          <span className="font-semibold">{activeProjects.length}</span> active project{activeProjects.length !== 1 ? 's' : ''} ·
+          Total: <span className="font-semibold text-[#27AE60]">{formatCurrency(totalValue)}</span>
+        </div>
+        <button className="btn-primary text-sm" onClick={() => open()}>+ New Project</button>
+      </div>
+
+      {activeProjects.length === 0 ? (
+        <div className="card text-center py-12">
+          <p className="text-gray-400 mb-4">No active landscaping projects</p>
+          <button className="btn-primary" onClick={() => open()}>Create first project</button>
+        </div>
+      ) : (
+        <div className="card p-0 overflow-hidden mb-4">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                {['#','Client','Description','Revenue','Est. Cost','Margin','Status',''].map(h => (
+                  <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {activeProjects.map(p => <ProjectRow key={p.id} p={p} />)}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {archivedProjects.length > 0 && (
+        <div>
+          <button
+            className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 mb-3"
+            onClick={() => setShowArchived(!showArchived)}>
+            <span>{showArchived ? '▼' : '▶'}</span>
+            <span>Archived / Invoiced ({archivedProjects.length})</span>
+          </button>
+          {showArchived && (
+            <div className="card p-0 overflow-hidden opacity-75">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-200">
+                    {['#','Client','Description','Revenue','Est. Cost','Margin','Status',''].map(h => (
+                      <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {archivedProjects.map(p => <ProjectRow key={p.id} p={p} archived />)}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* View Modal */}
+      {viewProject && (
+        <Modal title={`${viewProject.projectNumber} · ${viewProject.clientName}`} onClose={() => setViewProject(null)} size="lg">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div><p className="text-xs text-gray-500">Description</p><p className="font-medium">{viewProject.description || '—'}</p></div>
+              <div><p className="text-xs text-gray-500">Address</p><p className="font-medium">{viewProject.address || '—'}</p></div>
+              <div><p className="text-xs text-gray-500">Start → End</p><p className="font-medium">{viewProject.startDate || '—'} → {viewProject.endDate || '—'}</p></div>
+              <div><p className="text-xs text-gray-500">Est. Hours</p><p className="font-medium">{viewProject.estimatedHours} hrs</p></div>
+            </div>
+
+            {(() => {
+              const jc = calcJobCostingForProject(viewProject, data);
+              const hasActual = jc.actualHours > 0 || jc.actualExpenses > 0;
+              return (
+                <div className="grid grid-cols-3 gap-3 bg-gray-50 rounded-xl p-4 text-center">
+                  <div>
+                    <p className="text-xs text-gray-500">Est. Revenue</p>
+                    <p className="text-xl font-bold text-[#27AE60]">{formatCurrency(jc.estimatedRevenue)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-amber-600">Est. Cost</p>
+                    <p className="text-xl font-bold text-amber-600">{formatCurrency(jc.estimatedCost)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Margin</p>
+                    <p className={`text-xl font-bold ${viewProject.grossMargin >= data.settings.targetMargin ? 'text-green-600' : 'text-yellow-600'}`}>
+                      {formatPercent(viewProject.grossMargin)}
+                    </p>
+                  </div>
+                  {hasActual && (
+                    <>
+                      <div><p className="text-xs text-gray-500">Actual Hours</p><p className="text-lg font-bold text-gray-800">{jc.actualHours.toFixed(1)} hrs</p></div>
+                      <div><p className="text-xs text-gray-500">Actual Cost</p><p className="text-lg font-bold text-gray-800">{formatCurrency(jc.actualCost)}</p></div>
+                      <div>
+                        <p className="text-xs text-gray-500">Variance</p>
+                        <p className={`text-lg font-bold ${jc.variance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {jc.variance >= 0 ? `+${formatCurrency(jc.variance)}` : formatCurrency(jc.variance)}
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div className="flex gap-3 pt-2 border-t">
+              <select className="input flex-1" value={viewProject.status}
+                onChange={e => updateStatus(viewProject.id, e.target.value as ProjectStatus)}>
+                <option value="approved">Approved</option>
+                <option value="in_progress">In Progress</option>
+                <option value="completed">Completed</option>
+                <option value="invoiced">Invoiced (Archive)</option>
+              </select>
+              <button className="btn-secondary" onClick={() => { open(viewProject); setViewProject(null); }}>Edit</button>
+              <button className="btn-danger" onClick={() => del(viewProject.id)}>Delete</button>
+              <button className="btn-secondary" onClick={() => setViewProject(null)}>Close</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Add/Edit Modal */}
+      {showModal && (
+        <Modal title={editing ? `Edit ${editing.projectNumber}` : 'New Landscaping Project'} onClose={() => setShowModal(false)} size="lg">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="label">Client / Company Name *</label>
+                <input className="input" value={form.clientName} onChange={e => setForm({...form, clientName: e.target.value})} />
+              </div>
+              <div className="col-span-2">
+                <label className="label">Project Description</label>
+                <input className="input" value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="e.g. Backyard patio + sod install" />
+              </div>
+              <div className="col-span-2">
+                <label className="label">Property Address</label>
+                <input className="input" value={form.address} onChange={e => setForm({...form, address: e.target.value})} />
+              </div>
+              <div>
+                <label className="label">Start Date</label>
+                <input className="input" type="date" value={form.startDate} onChange={e => setForm({...form, startDate: e.target.value})} />
+              </div>
+              <div>
+                <label className="label">End Date</label>
+                <input className="input" type="date" value={form.endDate} onChange={e => setForm({...form, endDate: e.target.value})} />
+              </div>
+              <div>
+                <label className="label">Estimated Labor Hours</label>
+                <input className="input" type="number" value={form.estimatedHours || ''} onChange={e => setForm({...form, estimatedHours: Number(e.target.value)})} />
+              </div>
+              <div>
+                <label className="label">Estimated Material Cost ($)</label>
+                <input className="input" type="number" value={form.estimatedMaterialCost || ''} onChange={e => setForm({...form, estimatedMaterialCost: Number(e.target.value)})} />
+              </div>
+              <div>
+                <label className="label">Status</label>
+                <select className="input" value={form.status} onChange={e => setForm({...form, status: e.target.value as ProjectStatus})}>
+                  <option value="approved">Approved</option>
+                  <option value="in_progress">In Progress</option>
+                  <option value="completed">Completed</option>
+                  <option value="invoiced">Invoiced (Archive)</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Line Items</p>
+                <button className="text-xs text-[#27AE60] hover:underline" onClick={addLineItem}>+ Add Line</button>
+              </div>
+              {form.lineItems.length === 0 ? (
+                <p className="text-xs text-gray-400 italic">No line items yet. Add services or materials.</p>
+              ) : (
+                <div className="space-y-2">
+                  {form.lineItems.map((li, i) => (
+                    <div key={li.id} className="grid grid-cols-12 gap-1 items-center text-xs bg-gray-50 rounded-lg p-2">
+                      <input className="input col-span-4 text-xs py-1" placeholder="Name" value={li.name}
+                        onChange={e => updateLineItem(i, 'name', e.target.value)} />
+                      <input className="input col-span-1 text-xs py-1 text-center" type="number" placeholder="Qty" value={li.qty || ''}
+                        onChange={e => updateLineItem(i, 'qty', Number(e.target.value))} />
+                      <input className="input col-span-2 text-xs py-1" placeholder="Unit" value={li.unit}
+                        onChange={e => updateLineItem(i, 'unit', e.target.value)} />
+                      <input className="input col-span-2 text-xs py-1 text-amber-700" type="number" placeholder="Cost" value={li.unitCost || ''}
+                        onChange={e => updateLineItem(i, 'unitCost', Number(e.target.value))} />
+                      <input className="input col-span-2 text-xs py-1" type="number" placeholder="Price" value={li.unitPrice || ''}
+                        onChange={e => updateLineItem(i, 'unitPrice', Number(e.target.value))} />
+                      <button className="col-span-1 text-red-400 hover:text-red-600 text-center" onClick={() => removeLineItem(i)}>✕</button>
+                    </div>
+                  ))}
+                  <div className="flex justify-between text-xs font-semibold pt-1 px-2">
+                    <span className="text-amber-600">Cost: {formatCurrency(form.totalCost)}</span>
+                    <span className="text-[#27AE60]">Revenue: {formatCurrency(form.subtotalRevenue)}</span>
+                    <span className={form.grossMargin >= data.settings.targetMargin ? 'text-green-600' : 'text-yellow-600'}>
+                      Margin: {formatPercent(form.grossMargin)}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="label">Notes</label>
+              <textarea className="input resize-none" rows={2} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} />
+            </div>
+
+            <div className="flex gap-3">
+              <button className="btn-primary flex-1" onClick={save}>Save Project</button>
+              <button className="btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Maintenance Jobs Tab ─────────────────────────────────────────────────────
+function MaintenanceTab({ data, setData }: Props) {
+  const navigate = useNavigate();
   const [selectedId, setSelectedId] = useState<string | null>(
     data.jobs.length > 0 ? data.jobs[0].id : null
   );
-  const [tab, setTab] = useState<'costcodes' | 'projections' | 'details'>('costcodes');
+  const [detailTab, setDetailTab] = useState<'costcodes' | 'projections' | 'details'>('costcodes');
   const [editingCodes, setEditingCodes] = useState(false);
   const [codesDraft, setCodesDraft] = useState<JobCostCode[]>([]);
   const [showProjectionModal, setShowProjectionModal] = useState(false);
   const [projNotes, setProjNotes] = useState('');
+  const [showSaved, setShowSaved] = useState(false);
+  const [notesDraft, setNotesDraft] = useState('');
+  const [expandedCodes, setExpandedCodes] = useState<Set<CostCodeCategory>>(new Set());
 
   const job = data.jobs.find(j => j.id === selectedId) ?? null;
 
+  useEffect(() => { setNotesDraft(job?.notes ?? ''); }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function save(updated: Job) {
     const newData = { ...data, jobs: data.jobs.map(j => j.id === updated.id ? updated : j) };
-    setData(newData); saveData(newData);
+    setData(newData);
+    saveData(newData);
+    setShowSaved(true);
+    setTimeout(() => setShowSaved(false), 2000);
   }
 
   function startEditCodes() {
@@ -130,12 +572,10 @@ export default function Jobs({ data, setData }: Props) {
     : 0;
 
   return (
-    <div className="flex h-full gap-4" style={{ minHeight: 600 }}>
+    <div className="flex gap-4" style={{ minHeight: 500 }}>
       {/* ── Left: job list ── */}
-      <div className="w-60 shrink-0 flex flex-col gap-2">
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-sm font-bold text-gray-700">Active Jobs</h2>
-        </div>
+      <div className="w-56 shrink-0 flex flex-col gap-2">
+        <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Active Jobs</h2>
         {data.jobs.length === 0 && (
           <p className="text-xs text-gray-400 italic">No jobs yet. Convert a quote to a job from the Quotes page.</p>
         )}
@@ -144,7 +584,7 @@ export default function Jobs({ data, setData }: Props) {
           return (
             <button
               key={j.id}
-              onClick={() => { setSelectedId(j.id); setTab('costcodes'); setEditingCodes(false); }}
+              onClick={() => { setSelectedId(j.id); setDetailTab('costcodes'); setEditingCodes(false); }}
               className={`text-left p-3 rounded-xl border transition-colors ${
                 selectedId === j.id
                   ? 'bg-[#27AE60] text-white border-[#27AE60]'
@@ -196,27 +636,24 @@ export default function Jobs({ data, setData }: Props) {
                   {job.startDate} → {job.endDate} · Crew: {crew?.name ?? 'Unassigned'} · {job.visitsPerMonth} visits/mo · {job.driveTimeMinutes} min drive
                 </p>
               </div>
-              <div className="flex gap-2 shrink-0">
-                <select
-                  className="input text-sm py-1"
-                  value={job.status}
-                  onChange={e => updateField('status', e.target.value)}
-                >
+              <div className="flex items-center gap-2 shrink-0">
+                {showSaved && <span className="text-xs text-green-600 bg-green-50 px-3 py-1 rounded-full">Saved ✓</span>}
+                <select className="input text-sm py-1" value={job.status}
+                  onChange={e => updateField('status', e.target.value)}>
                   <option value="active">Active</option>
                   <option value="on_hold">On Hold</option>
                   <option value="completed">Completed</option>
                   <option value="cancelled">Cancelled</option>
                 </select>
-                <button
-                  className="btn-primary text-sm px-3 py-1"
-                  onClick={() => setShowProjectionModal(true)}
-                >
+                <button className="btn-secondary text-sm px-3 py-1" onClick={() => navigate('/schedule')}>
+                  📅 Schedule
+                </button>
+                <button className="btn-primary text-sm px-3 py-1" onClick={() => setShowProjectionModal(true)}>
                   + Post Projection
                 </button>
               </div>
             </div>
 
-            {/* Summary metrics */}
             <div className="grid grid-cols-4 gap-3 mt-4">
               {[
                 { label: 'Total Budgeted', value: fmt(totalBudgeted), color: 'text-gray-800' },
@@ -235,9 +672,9 @@ export default function Jobs({ data, setData }: Props) {
           {/* Tabs */}
           <div className="flex gap-1 border-b border-gray-200">
             {(['costcodes', 'projections', 'details'] as const).map(t => (
-              <button key={t} onClick={() => setTab(t)}
+              <button key={t} onClick={() => setDetailTab(t)}
                 className={`px-4 py-2 text-sm font-semibold capitalize transition-colors border-b-2 -mb-px ${
-                  tab === t ? 'border-[#27AE60] text-[#27AE60]' : 'border-transparent text-gray-500 hover:text-gray-700'
+                  detailTab === t ? 'border-[#27AE60] text-[#27AE60]' : 'border-transparent text-gray-500 hover:text-gray-700'
                 }`}>
                 {t === 'costcodes' ? 'Cost Codes' : t.charAt(0).toUpperCase() + t.slice(1)}
               </button>
@@ -245,7 +682,7 @@ export default function Jobs({ data, setData }: Props) {
           </div>
 
           {/* ── Cost Codes Tab ── */}
-          {tab === 'costcodes' && (
+          {detailTab === 'costcodes' && (
             <div className="card">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Cost Code Breakdown</h3>
@@ -266,17 +703,38 @@ export default function Jobs({ data, setData }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {(editingCodes ? codesDraft : job.costCodes).map(cc => {
-                    const remaining = Math.max(0, cc.budgeted - cc.actual);
-                    const pctUsed   = cc.budgeted > 0 ? (cc.actual / cc.budgeted) * 100 : 0;
-                    const over      = cc.actual > cc.budgeted;
-                    return (
+                  {(editingCodes ? codesDraft : job.costCodes).flatMap(cc => {
+                    const remaining  = Math.max(0, cc.budgeted - cc.actual);
+                    const pctUsed    = cc.budgeted > 0 ? (cc.actual / cc.budgeted) * 100 : 0;
+                    const over       = cc.actual > cc.budgeted;
+                    const isExpanded = expandedCodes.has(cc.category);
+                    const drillLines = !editingCodes && contract ? buildDrillDown(cc.category, job, contract, data) : [];
+                    const canExpand  = drillLines.length > 0;
+
+                    const toggleExpand = () => setExpandedCodes(prev => {
+                      const next = new Set(prev);
+                      if (next.has(cc.category)) next.delete(cc.category); else next.add(cc.category);
+                      return next;
+                    });
+
+                    const mainRow = (
                       <tr key={cc.category} className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="py-3 px-2 font-semibold text-gray-800">{COST_CODE_LABELS[cc.category]}</td>
+                        <td className="py-3 px-2 font-semibold text-gray-800">
+                          <div className="flex items-center gap-1.5">
+                            {!editingCodes && (
+                              <button
+                                onClick={canExpand ? toggleExpand : undefined}
+                                className={`text-[10px] w-4 text-center transition-colors ${canExpand ? 'text-gray-400 hover:text-gray-700 cursor-pointer' : 'text-gray-200 cursor-default'}`}
+                              >
+                                {canExpand ? (isExpanded ? '▼' : '▶') : '▶'}
+                              </button>
+                            )}
+                            {COST_CODE_LABELS[cc.category]}
+                          </div>
+                        </td>
                         <td className="py-3 px-2">
                           {editingCodes
-                            ? <input type="number" min="0" step="1"
-                                className="input w-28 text-sm py-1"
+                            ? <input type="number" min="0" step="1" className="input w-28 text-sm py-1"
                                 value={codesDraft.find(c => c.category === cc.category)?.budgeted ?? 0}
                                 onChange={e => patchCode(cc.category, 'budgeted', Number(e.target.value))} />
                             : <span className="text-gray-700">{fmtDec(cc.budgeted)}</span>
@@ -284,8 +742,7 @@ export default function Jobs({ data, setData }: Props) {
                         </td>
                         <td className="py-3 px-2">
                           {editingCodes
-                            ? <input type="number" min="0" step="1"
-                                className="input w-28 text-sm py-1"
+                            ? <input type="number" min="0" step="1" className="input w-28 text-sm py-1"
                                 value={codesDraft.find(c => c.category === cc.category)?.actual ?? 0}
                                 onChange={e => patchCode(cc.category, 'actual', Number(e.target.value))} />
                             : <span className={over ? 'text-red-600 font-semibold' : 'text-gray-700'}>{fmtDec(cc.actual)}</span>
@@ -313,6 +770,16 @@ export default function Jobs({ data, setData }: Props) {
                         </td>
                       </tr>
                     );
+
+                    const detailRows = isExpanded && !editingCodes ? drillLines.map((line, i) => (
+                      <tr key={`${cc.category}_d${i}`} className="bg-blue-50/40 border-b border-blue-100/60">
+                        <td className="py-1.5 pl-8 pr-2 text-xs text-gray-500 italic" colSpan={2}>{line.label}</td>
+                        <td className="py-1.5 px-2 text-xs text-gray-500">{fmtDec(line.amount)}</td>
+                        <td colSpan={3} />
+                      </tr>
+                    )) : [];
+
+                    return [mainRow, ...detailRows];
                   })}
                 </tbody>
                 <tfoot>
@@ -332,7 +799,7 @@ export default function Jobs({ data, setData }: Props) {
           )}
 
           {/* ── Projections Tab ── */}
-          {tab === 'projections' && (
+          {detailTab === 'projections' && (
             <div className="flex flex-col gap-4">
               {job.projections.length === 0 && (
                 <div className="card text-center py-10 text-gray-400">
@@ -404,7 +871,7 @@ export default function Jobs({ data, setData }: Props) {
           )}
 
           {/* ── Details Tab ── */}
-          {tab === 'details' && (
+          {detailTab === 'details' && (
             <div className="card">
               <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-4">Job Details</h3>
               <div className="grid grid-cols-2 gap-4">
@@ -450,8 +917,9 @@ export default function Jobs({ data, setData }: Props) {
                 </div>
                 <div className="col-span-2">
                   <label className="label">Notes</label>
-                  <textarea className="input" rows={3} value={job.notes}
-                    onChange={e => updateField('notes', e.target.value)} />
+                  <textarea className="input" rows={3} value={notesDraft}
+                    onChange={e => setNotesDraft(e.target.value)}
+                    onBlur={() => { if (notesDraft !== job.notes) updateField('notes', notesDraft); }} />
                 </div>
               </div>
             </div>
@@ -498,6 +966,41 @@ export default function Jobs({ data, setData }: Props) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Main Jobs Page ────────────────────────────────────────────────────────────
+export default function Jobs({ data, setData }: Props) {
+  const location  = useLocation();
+  const navState  = (location.state ?? {}) as { tab?: MainTab; openProjectId?: string };
+  const [tab, setTab] = useState<MainTab>(navState.tab ?? 'maintenance');
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Jobs</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Maintenance contracts and landscaping projects</p>
+        </div>
+      </div>
+
+      <div className="flex gap-1 mb-6 bg-gray-100 rounded-xl p-1 w-fit">
+        {([
+          { key: 'maintenance' as MainTab, label: 'Maintenance', count: data.jobs.filter(j => j.status === 'active').length },
+          { key: 'landscaping' as MainTab, label: 'Landscaping Projects', count: data.projects.filter(p => ['approved','in_progress','completed'].includes(p.status)).length },
+        ]).map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors ${
+              tab === t.key ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
+            }`}>
+            {t.label} <span className="ml-1.5 text-xs text-gray-400">({t.count})</span>
+          </button>
+        ))}
+      </div>
+
+      {tab === 'maintenance' && <MaintenanceTab data={data} setData={setData} />}
+      {tab === 'landscaping' && <LandscapingTab data={data} setData={setData} openProjectId={navState.openProjectId} />}
     </div>
   );
 }

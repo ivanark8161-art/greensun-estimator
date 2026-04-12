@@ -15,6 +15,8 @@ const STATUS_BADGE: Record<ContractStatus, string> = {
   active:            'badge-green',
   closed:            'badge-gray',
   lost:              'badge-red',
+  converted:         'badge-green',
+  rejected:          'badge-red',
 };
 
 const STATUS_LABELS: Record<ContractStatus, string> = {
@@ -26,6 +28,8 @@ const STATUS_LABELS: Record<ContractStatus, string> = {
   active:            'Active',
   closed:            'Closed',
   lost:              'Lost',
+  converted:         'Converted',
+  rejected:          'Rejected',
 };
 
 interface Props { data: AppData; setData: (d: AppData) => void }

@@ -134,9 +134,10 @@ export default function Invoices({ data, setData }: Props) {
       snowTripIds  = selectedSnowIds;
       lineItems    = trips.flatMap(t => {
         const items: EstimateLineItem[] = [];
-        if (t.plowingHours > 0)   items.push({ id: uid(), name: `Snow Plowing — ${t.date}`,    description: `${t.snowfallInches || 0}" snowfall`,  qty: t.plowingHours,   unit: 'hour', unitCost: t.plowingCostRate,   unitPrice: t.plowingRate,   optional: false, taxable: false, notes: '' });
-        if (t.shovelingHours > 0) items.push({ id: uid(), name: `Snow Shoveling — ${t.date}`,  description: '',                                     qty: t.shovelingHours, unit: 'hour', unitCost: t.shovelingCostRate, unitPrice: t.shovelingRate, optional: false, taxable: false, notes: '' });
-        if (t.deicingBags > 0)    items.push({ id: uid(), name: `De-icing Material — ${t.date}`,description: '',                                     qty: t.deicingBags,    unit: 'bag',  unitCost: t.deicingCostRate,   unitPrice: t.deicingRate,   optional: false, taxable: false, notes: '' });
+        const sr = data.settings;
+        if (t.plowingHours > 0)   items.push({ id: uid(), name: `Snow Plowing — ${t.serviceDate}`,    description: `${t.snowfallInches || 0}" snowfall`,  qty: t.plowingHours,   unit: 'hour', unitCost: sr.plowingCostPerHour,   unitPrice: sr.plowingRatePerHour,   optional: false, taxable: false, notes: '' });
+        if (t.shovelingHours > 0) items.push({ id: uid(), name: `Snow Shoveling — ${t.serviceDate}`,  description: '',                                     qty: t.shovelingHours, unit: 'hour', unitCost: sr.shovelingCostPerHour, unitPrice: sr.shovelingRatePerHour, optional: false, taxable: false, notes: '' });
+        if (t.deicingBags > 0)    items.push({ id: uid(), name: `De-icing Material — ${t.serviceDate}`,description: '',                                     qty: t.deicingBags,    unit: 'bag',  unitCost: sr.deicingCostPerBag,    unitPrice: sr.deicingRatePerBag,    optional: false, taxable: false, notes: '' });
         return items;
       });
     } else {
@@ -148,7 +149,7 @@ export default function Invoices({ data, setData }: Props) {
     const taxRate   = data.settings.defaultTaxRate || 0;
     const taxAmount = subtotal * (taxRate / 100);
     const total     = subtotal + taxAmount;
-    const counter   = (data.invoiceCounter || 0) + 1;
+    const counter   = (data.invoiceCounter ?? 1) + 1;
     const today     = new Date().toISOString().split('T')[0];
     const due       = new Date(); due.setDate(due.getDate() + dueInDays);
 
@@ -188,7 +189,7 @@ export default function Invoices({ data, setData }: Props) {
   // Batch snow invoicing
   const batchCandidates = data.snowTrips.filter(t => {
     if (t.status === 'invoiced' || t.status === 'paid') return false;
-    const d = new Date(t.date + 'T12:00:00'); // noon to avoid timezone off-by-one
+    const d = new Date(t.serviceDate + 'T12:00:00'); // noon to avoid timezone off-by-one
     return d.getMonth() === batchMonth && d.getFullYear() === batchYear;
   });
   const batchByClient = batchCandidates.reduce<Record<string, typeof batchCandidates>>((acc, trip) => {
@@ -200,7 +201,7 @@ export default function Invoices({ data, setData }: Props) {
   function createBatchInvoices() {
     const groups = Object.entries(batchByClient);
     if (groups.length === 0) { alert('No uninvoiced snow trips for that month.'); return; }
-    let counter = data.invoiceCounter ?? 0;
+    let counter = data.invoiceCounter ?? 1;
     const newInvoices: Invoice[] = [];
     const invoicedTripIds: string[] = [];
     const today = new Date().toISOString().split('T')[0];
@@ -210,11 +211,12 @@ export default function Invoices({ data, setData }: Props) {
 
     for (const [clientName, trips] of groups) {
       counter++;
+      const sr = data.settings;
       const lineItems: EstimateLineItem[] = trips.flatMap(t => {
         const items: EstimateLineItem[] = [];
-        if (t.plowingHours > 0)   items.push({ id: uid(), name: `Snow Plowing — ${t.date}`,     description: `${t.snowfallInches || 0}" snowfall`, qty: t.plowingHours,   unit: 'hour', unitCost: t.plowingCostRate,   unitPrice: t.plowingRate,   optional: false, taxable: false, notes: '' });
-        if (t.shovelingHours > 0) items.push({ id: uid(), name: `Snow Shoveling — ${t.date}`,   description: '',                                   qty: t.shovelingHours, unit: 'hour', unitCost: t.shovelingCostRate, unitPrice: t.shovelingRate, optional: false, taxable: false, notes: '' });
-        if (t.deicingBags > 0)    items.push({ id: uid(), name: `De-icing Material — ${t.date}`, description: '',                                   qty: t.deicingBags,    unit: 'bag',  unitCost: t.deicingCostRate,   unitPrice: t.deicingRate,   optional: false, taxable: false, notes: '' });
+        if (t.plowingHours > 0)   items.push({ id: uid(), name: `Snow Plowing — ${t.serviceDate}`,     description: `${t.snowfallInches || 0}" snowfall`, qty: t.plowingHours,   unit: 'hour', unitCost: sr.plowingCostPerHour,   unitPrice: sr.plowingRatePerHour,   optional: false, taxable: false, notes: '' });
+        if (t.shovelingHours > 0) items.push({ id: uid(), name: `Snow Shoveling — ${t.serviceDate}`,   description: '',                                   qty: t.shovelingHours, unit: 'hour', unitCost: sr.shovelingCostPerHour, unitPrice: sr.shovelingRatePerHour, optional: false, taxable: false, notes: '' });
+        if (t.deicingBags > 0)    items.push({ id: uid(), name: `De-icing Material — ${t.serviceDate}`, description: '',                                   qty: t.deicingBags,    unit: 'bag',  unitCost: sr.deicingCostPerBag,    unitPrice: sr.deicingRatePerBag,    optional: false, taxable: false, notes: '' });
         return items;
       });
       const { subtotalRevenue: subtotal } = calcLineItemTotals(lineItems);
@@ -223,7 +225,7 @@ export default function Invoices({ data, setData }: Props) {
         id: `inv_${Date.now()}_${counter}`,
         invoiceNumber: `INV-${generateEstimateNumber(counter)}`,
         clientId: data.clients.find(c => c.name === clientName)?.id,
-        clientName, contractId: trips[0].contractId,
+        clientName, contractId: trips[0].jobId,
         snowTripIds: trips.map(t => t.id),
         lineItems, subtotal, taxRate, taxAmount, discountAmount: 0,
         total: subtotal + taxAmount,
@@ -535,13 +537,13 @@ export default function Invoices({ data, setData }: Props) {
                       <p className="text-sm font-semibold text-gray-900 mb-1">
                         {client}
                         <span className="ml-2 text-xs font-normal text-gray-400">
-                          → {trips.length} trip{trips.length !== 1 ? 's' : ''} · {formatCurrency(trips.reduce((s, t) => s + t.totalRevenue, 0))}
+                          → {trips.length} trip{trips.length !== 1 ? 's' : ''} · {formatCurrency(trips.reduce((s, t) => s + (t.plowingHours * data.settings.plowingRatePerHour) + (t.shovelingHours * data.settings.shovelingRatePerHour) + (t.deicingBags * data.settings.deicingRatePerBag), 0))}
                         </span>
                       </p>
                       <div className="space-y-0.5">
                         {trips.map(t => (
                           <p key={t.id} className="text-xs text-gray-500">
-                            {t.date} — {t.propertyAddress} — {formatCurrency(t.totalRevenue)}
+                            {t.serviceDate} — {t.propertyAddress} — {formatCurrency((t.plowingHours * data.settings.plowingRatePerHour) + (t.shovelingHours * data.settings.shovelingRatePerHour) + (t.deicingBags * data.settings.deicingRatePerBag))}
                           </p>
                         ))}
                       </div>
@@ -622,7 +624,7 @@ export default function Invoices({ data, setData }: Props) {
                     <label key={t.id} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-lg cursor-pointer">
                       <input type="checkbox" checked={selectedSnowIds.includes(t.id)} onChange={() => toggleSnow(t.id)} className="accent-[#27AE60] w-4 h-4" />
                       <div className="flex-1">
-                        <p className="text-sm font-medium">{t.clientName} — {t.date}</p>
+                        <p className="text-sm font-medium">{t.clientName} — {t.serviceDate}</p>
                         <p className="text-xs text-gray-400">
                           {t.snowfallInches > 0 ? `${t.snowfallInches}" · ` : ''}
                           {t.plowingHours > 0 ? `${t.plowingHours}hr plow ` : ''}
@@ -630,13 +632,13 @@ export default function Invoices({ data, setData }: Props) {
                           {t.deicingBags > 0 ? `${t.deicingBags} bags` : ''}
                         </p>
                       </div>
-                      <span className="font-bold text-sm text-gray-900">{formatCurrency(t.totalRevenue)}</span>
+                      <span className="font-bold text-sm text-gray-900">{formatCurrency((t.plowingHours * data.settings.plowingRatePerHour) + (t.shovelingHours * data.settings.shovelingRatePerHour) + (t.deicingBags * data.settings.deicingRatePerBag))}</span>
                     </label>
                   ))}
                 </div>
                 {selectedSnowIds.length > 0 && (
                   <p className="text-sm font-semibold text-[#27AE60] mt-2">
-                    {selectedSnowIds.length} trips · Total: {formatCurrency(data.snowTrips.filter(t=>selectedSnowIds.includes(t.id)).reduce((s,t)=>s+t.totalRevenue,0))}
+                    {selectedSnowIds.length} trips · Total: {formatCurrency(data.snowTrips.filter(t=>selectedSnowIds.includes(t.id)).reduce((s,t)=>s+(t.plowingHours*data.settings.plowingRatePerHour)+(t.shovelingHours*data.settings.shovelingRatePerHour)+(t.deicingBags*data.settings.deicingRatePerBag),0))}
                   </p>
                 )}
               </div>

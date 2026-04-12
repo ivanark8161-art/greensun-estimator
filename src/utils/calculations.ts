@@ -115,7 +115,11 @@ export function calcAnnualRevenue(data: AppData): number {
 }
 
 export function calcSnowSeasonRevenue(data: AppData): number {
-  return data.snowTrips.reduce((s, t) => s + t.totalRevenue, 0);
+  const s = data.settings;
+  return data.snowTrips.reduce((sum, t) =>
+    sum + (t.plowingHours * s.plowingRatePerHour)
+        + (t.shovelingHours * s.shovelingRatePerHour)
+        + (t.deicingBags * s.deicingRatePerBag), 0);
 }
 
 export function calcOutstandingInvoices(data: AppData): number {
@@ -237,12 +241,16 @@ export function calcMonthlyPnL(data: AppData, month: number, year: number) {
     .reduce((s, c) => s + c.monthlyRevenue, 0);
 
   // Snow revenue that month
+  const { plowingRatePerHour, shovelingRatePerHour, deicingRatePerBag } = data.settings;
   const snowRevenue = data.snowTrips
     .filter(t => {
-      const d = new Date(t.date);
+      const d = new Date(t.serviceDate);
       return d.getMonth() === month && d.getFullYear() === year;
     })
-    .reduce((s, t) => s + t.totalRevenue, 0);
+    .reduce((s, t) =>
+      s + (t.plowingHours * plowingRatePerHour)
+        + (t.shovelingHours * shovelingRatePerHour)
+        + (t.deicingBags * deicingRatePerBag), 0);
 
   // Actual time entries that month
   const monthTimeEntries = data.timeEntries.filter(t => {

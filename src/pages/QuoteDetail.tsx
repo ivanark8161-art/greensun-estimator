@@ -21,6 +21,8 @@ const QUOTE_STATUS_OPTIONS: { value: ContractStatus; label: string }[] = [
   { value: 'awaiting_response', label: 'Awaiting Response' },
   { value: 'changes_requested', label: 'Changes Requested' },
   { value: 'approved',          label: 'Approved' },
+  { value: 'converted',         label: 'Converted to Job' },
+  { value: 'rejected',          label: 'Rejected' },
 ];
 
 const STATUS_COLOR: Record<string, string> = {
@@ -29,10 +31,12 @@ const STATUS_COLOR: Record<string, string> = {
   awaiting_response: 'bg-yellow-100 text-yellow-700',
   changes_requested: 'bg-orange-100 text-orange-700',
   approved:          'bg-green-100 text-green-700',
+  converted:         'bg-blue-100 text-blue-700',
+  rejected:          'bg-red-100 text-red-600',
 };
 
 // ─── Snow classifier ─────────────────────────────────────────────────────────
-const SNOW_IDS = new Set(['svc16','svc17','svc18','svc19','svc20','snow_trip','svc20']);
+const SNOW_IDS = new Set(['svc16','svc17','svc18','svc19','svc20','snow_trip']);
 function isSnowItem(i: EstimateLineItem) {
   return SNOW_IDS.has(i.catalogItemId ?? '') || i.isSnowPerTrip === true;
 }
@@ -85,11 +89,21 @@ function LineItemRow({ item, onChange, onDelete, onRecalc, targetMargin }: RowPr
         </div>
         <p className="text-xs text-gray-400 text-center mt-0.5">{formatCurrency(costTotal)}</p>
       </td>
-      <td className="px-2 py-2 w-28">
-        <div className="flex items-center gap-1">
+      <td className="px-2 py-2 w-32">
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => onChange({ unitPrice: Math.max(0, parseFloat((item.unitPrice - 5).toFixed(2))) })}
+            className="text-gray-400 hover:text-red-500 font-bold text-base w-5 h-7 flex items-center justify-center rounded hover:bg-gray-100"
+            title="-$5">▾</button>
           <span className="text-gray-600 text-sm">$</span>
           <input type="number" min="0" step="0.01" className="w-full text-sm font-semibold text-gray-900 border border-gray-300 rounded px-1 py-1 focus:outline-none focus:border-[#27AE60]"
             value={item.unitPrice || ''} onChange={e => onChange({ unitPrice: parseFloat(e.target.value) || 0 })} title="Client price" />
+          <button
+            type="button"
+            onClick={() => onChange({ unitPrice: parseFloat((item.unitPrice + 5).toFixed(2)) })}
+            className="text-gray-400 hover:text-green-600 font-bold text-base w-5 h-7 flex items-center justify-center rounded hover:bg-gray-100"
+            title="+$5">▴</button>
         </div>
         <p className="text-xs text-gray-500 text-center mt-0.5 font-medium">{formatCurrency(subtotal)}</p>
       </td>
@@ -173,23 +187,27 @@ export default function QuoteDetail({ data, setData }: Props) {
 
   const isNew     = id === undefined;
   const existing  = isNew ? null : data.contracts.find(c => c.id === id) ?? null;
-  const fromReqId = searchParams.get('requestId');
-  const fromReq   = fromReqId ? data.requests?.find(r => r.id === fromReqId) : null;
+  const fromReqId    = searchParams.get('requestId');
+  const fromReq      = fromReqId ? data.requests?.find(r => r.id === fromReqId) : null;
+  const fromClientId = searchParams.get('clientId');
+  const fromClient   = fromClientId ? data.clients.find(c => c.id === fromClientId) : null;
+  const fromClientContact = fromClient ? (fromClient.contacts?.find(ct => ct.isPrimary) ?? fromClient.contacts?.[0]) : null;
+  const fromClientProp    = fromClient ? (fromClient.properties?.find(p => p.isBillingAddress) ?? fromClient.properties?.[0]) : null;
 
-  // ── Form state (pre-filled from existing contract or from request) ──────────
+  // ── Form state (pre-filled from existing contract, request, or client) ──────
   const [quoteId]       = useState(existing?.id ?? cid());
   const [status, setStatus] = useState<ContractStatus>(existing?.status ?? 'draft');
   const [title, setTitle]   = useState(existing?.title ?? fromReq?.title ?? '');
   const [jobType, setJobType] = useState<'maintenance' | 'landscaping'>('maintenance');
 
-  const [clientName,    setClientName]    = useState(existing?.clientName    ?? fromReq?.clientName    ?? '');
-  const [clientId,      setClientId]      = useState(existing?.clientId      ?? fromReq?.clientId      ?? '');
-  const [propertyType,  setPropertyType]  = useState<PropertyType>(existing?.propertyType ?? fromReq?.propertyType ?? 'commercial');
-  const [address,       setAddress]       = useState(existing?.address       ?? fromReq?.propertyAddress ?? '');
-  const [city,          setCity]          = useState(existing?.city          ?? fromReq?.city          ?? '');
-  const [state,         setState_]        = useState(existing?.state         ?? fromReq?.state         ?? '');
-  const [zip,           setZip]           = useState(existing?.zip           ?? fromReq?.zip           ?? '');
-  const [clientEmail,   setClientEmail]   = useState(existing?.clientEmail   ?? fromReq?.email         ?? '');
+  const [clientName,    setClientName]    = useState(existing?.clientName    ?? fromReq?.clientName    ?? fromClient?.companyName ?? fromClient?.name ?? '');
+  const [clientId,      setClientId]      = useState(existing?.clientId      ?? fromReq?.clientId      ?? fromClientId ?? '');
+  const [propertyType,  setPropertyType]  = useState<PropertyType>(existing?.propertyType ?? fromReq?.propertyType ?? fromClient?.type ?? 'commercial');
+  const [address,       setAddress]       = useState(existing?.address       ?? fromReq?.propertyAddress ?? fromClientProp?.street1 ?? '');
+  const [city,          setCity]          = useState(existing?.city          ?? fromReq?.city          ?? fromClientProp?.city ?? '');
+  const [state,         setState_]        = useState(existing?.state         ?? fromReq?.state         ?? fromClientProp?.state ?? '');
+  const [zip,           setZip]           = useState(existing?.zip           ?? fromReq?.zip           ?? fromClientProp?.zip ?? '');
+  const [clientEmail,   setClientEmail]   = useState(existing?.clientEmail   ?? fromReq?.email         ?? fromClientContact?.email ?? '');
   const [milesFromShop, setMilesFromShop] = useState(existing?.milesFromShop ?? 0);
 
   const [turfSF,      setTurfSF]      = useState(existing?.turfSF      ?? fromReq?.turfSF      ?? 0);
@@ -405,8 +423,56 @@ export default function QuoteDetail({ data, setData }: Props) {
     setData(updated);
     saveData(updated);
     setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
+    setTimeout(() => setSaved(false), 2000);
     if (!existing) navigate(`/quotes/${quoteId}`, { replace: true });
+  }
+
+  // Auto-save on blur — only when editing an existing quote
+  function autoSave() {
+    if (existing) save();
+  }
+
+  // ── Create Revision ─────────────────────────────────────────────────────────
+  function createRevision() {
+    if (!existing) return;
+    if (!confirm('This will mark the current quote as "Changes Requested" and create a new revision. Continue?')) return;
+
+    // Figure out revision number
+    const maxRev = data.contracts
+      .filter(c => c.revisionOf === (existing.revisionOf ?? existing.id) || c.id === (existing.revisionOf ?? existing.id))
+      .reduce((max, c) => Math.max(max, c.revisionNumber ?? 0), 0);
+    const newRevNum = maxRev + 1;
+
+    // Mark current as changes_requested
+    const currentContract = buildContract();
+    const markedContract = { ...currentContract, status: 'changes_requested' as ContractStatus };
+
+    // Create new revision with same data
+    const revId = cid();
+    const counter = (data.estimateCounter ?? 7) + 1;
+    const revContract = {
+      ...currentContract,
+      id: revId,
+      estimateNumber: generateEstimateNumber(counter),
+      status: 'draft' as ContractStatus,
+      title: existing.revisionNumber != null
+        ? currentContract.title?.replace(/\s*—\s*Revision #\d+/, '') + ` — Revision #${newRevNum}`
+        : (currentContract.title || existing.clientName) + ` — Revision #${newRevNum}`,
+      revisionOf: existing.revisionOf ?? existing.id,
+      revisionNumber: newRevNum,
+      createdAt: new Date().toISOString(),
+    };
+
+    const updated: AppData = {
+      ...data,
+      estimateCounter: counter,
+      contracts: data.contracts
+        .map(c => c.id === existing.id ? markedContract : c)
+        .concat(revContract),
+    };
+    setData(updated);
+    saveData(updated);
+    navigate(`/quotes/${revId}`, { replace: false });
   }
 
   function activate() {
@@ -590,24 +656,66 @@ export default function QuoteDetail({ data, setData }: Props) {
   const requestLink = existing?.requestId ? data.requests?.find(r => r.id === existing.requestId) : fromReq;
   const quoteNum = existing?.estimateNumber ?? '—';
 
+  // ── Revision chain ───────────────────────────────────────────────────────────
+  const rootId = existing?.revisionOf ?? existing?.id ?? '';
+  const revisionChain = existing
+    ? data.contracts
+        .filter(c => c.id === rootId || c.revisionOf === rootId)
+        .sort((a, b) => (a.revisionNumber ?? 0) - (b.revisionNumber ?? 0))
+    : [];
+
+  // Read-only mode: converted or rejected quotes show snapshot only
+  const isReadOnly = existing?.status === 'converted' || existing?.status === 'rejected';
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* ── Top bar ──────────────────────────────────────────────────────────── */}
-      <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-4 sticky top-0 z-10">
-        <button onClick={() => navigate('/quotes')} className="text-gray-400 hover:text-gray-600 text-sm">← Quotes</button>
+      <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-3 sticky top-0 z-10 flex-wrap">
+        <button onClick={() => navigate('/quotes')} className="text-gray-400 hover:text-gray-600 text-sm shrink-0">← Quotes</button>
         <span className="text-gray-300">|</span>
-        <span className="text-xs font-mono text-gray-500">#{quoteNum}</span>
-        {/* Status selector */}
-        <select
-          value={status}
-          onChange={e => setStatus(e.target.value as ContractStatus)}
-          className={`text-xs font-semibold px-3 py-1 rounded-full border-0 cursor-pointer ${STATUS_COLOR[status] ?? 'bg-gray-100 text-gray-600'}`}
-        >
-          {QUOTE_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        <span className="text-xs font-mono text-gray-500 shrink-0">#{quoteNum}</span>
 
-        <div className="ml-auto flex gap-2 items-center">
+        {/* Revision chain breadcrumb */}
+        {revisionChain.length > 1 && (
+          <div className="flex items-center gap-1 text-xs shrink-0">
+            {revisionChain.map((c, i) => (
+              <span key={c.id} className="flex items-center gap-1">
+                {i > 0 && <span className="text-gray-300">→</span>}
+                <button
+                  onClick={() => navigate(`/quotes/${c.id}`)}
+                  className={`px-2 py-0.5 rounded-full font-semibold transition-colors ${
+                    c.id === existing?.id
+                      ? 'bg-gray-800 text-white'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}
+                >
+                  {c.revisionNumber ? `Rev #${c.revisionNumber}` : 'Original'}
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Status selector — read-only badge for converted/rejected */}
+        {isReadOnly ? (
+          <span className={`text-xs font-semibold px-3 py-1 rounded-full ${STATUS_COLOR[status] ?? 'bg-gray-100 text-gray-600'}`}>
+            {QUOTE_STATUS_OPTIONS.find(o => o.value === status)?.label ?? status}
+          </span>
+        ) : (
+          <select
+            value={status}
+            onChange={e => setStatus(e.target.value as ContractStatus)}
+            className={`text-xs font-semibold px-3 py-1 rounded-full border-0 cursor-pointer ${STATUS_COLOR[status] ?? 'bg-gray-100 text-gray-600'}`}
+          >
+            {QUOTE_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        )}
+
+        <div className="ml-auto flex gap-2 items-center flex-wrap">
           {saved && <span className="text-xs text-green-600 bg-green-50 px-3 py-1 rounded-full">Saved ✓</span>}
+          {isReadOnly && (
+            <span className="text-xs text-blue-600 bg-blue-50 px-3 py-1 rounded-full font-semibold">Read-only snapshot</span>
+          )}
           {requestLink && (
             <button onClick={() => navigate(`/requests/${requestLink.id}`)} className="text-xs text-gray-500 hover:text-[#27AE60] border border-gray-200 px-3 py-1.5 rounded-lg">
               Request #{requestLink.requestNumber}
@@ -628,23 +736,115 @@ export default function QuoteDetail({ data, setData }: Props) {
             notes={notes}
             terms={terms}
           />
-          <button onClick={() => setStatus('awaiting_response')} className="btn-secondary text-sm px-4 py-1.5">Mark as Sent</button>
-          {status === 'approved' && (
-            <button onClick={activate} className="bg-[#27AE60] text-white text-sm px-4 py-1.5 rounded-lg hover:bg-green-600 transition-colors font-medium">
-              Convert to Active Job →
-            </button>
+          {!isReadOnly && (
+            <>
+              <button onClick={() => setStatus('awaiting_response')} className="btn-secondary text-sm px-4 py-1.5">Mark as Sent</button>
+              {existing && (status === 'awaiting_response' || status === 'changes_requested' || status === 'draft' || status === 'approved') && (
+                <button onClick={createRevision} className="btn-secondary text-sm px-4 py-1.5">
+                  Create Revision
+                </button>
+              )}
+              {status === 'approved' && (
+                <button onClick={activate} className="bg-[#27AE60] text-white text-sm px-4 py-1.5 rounded-lg hover:bg-green-600 transition-colors font-medium">
+                  Convert to Active Job →
+                </button>
+              )}
+              <button onClick={save} className="btn-primary text-sm px-5 py-1.5">Save</button>
+            </>
           )}
-          <button onClick={save} className="btn-primary text-sm px-5 py-1.5">Save</button>
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto px-6 py-6 space-y-5">
+      {/* ── Read-only snapshot view ─────────────────────────────────────────── */}
+      {isReadOnly && (
+        <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">{title || existing?.clientName}</h1>
+            <p className="text-sm text-gray-500 mt-1">Quote #{quoteNum} · Created {existing ? new Date(existing.createdAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : ''}</p>
+          </div>
+
+          {/* Client + address */}
+          <div className="card">
+            <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">Client</h3>
+            <p className="font-semibold text-gray-900">{clientName}</p>
+            <p className="text-sm text-gray-500">{[address, city, state, zip].filter(Boolean).join(', ')}</p>
+            {clientEmail && <p className="text-sm text-[#27AE60]">{clientEmail}</p>}
+          </div>
+
+          {/* Line items */}
+          <div className="card p-0 overflow-hidden">
+            <div className="px-5 py-3 border-b border-gray-100 bg-gray-50">
+              <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400">Services</h3>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500">Service</th>
+                  <th className="text-center px-3 py-2 text-xs font-semibold text-gray-500">Qty</th>
+                  <th className="text-center px-3 py-2 text-xs font-semibold text-gray-500">Unit</th>
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500">Unit Price</th>
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lineItems.filter(i => !i.optional).map(li => (
+                  <tr key={li.id} className="border-b border-gray-50">
+                    <td className="px-4 py-2.5">
+                      <p className="font-medium text-gray-900">{li.name}</p>
+                      {li.description && <p className="text-xs text-gray-400">{li.description}</p>}
+                    </td>
+                    <td className="px-3 py-2.5 text-center text-gray-600">{li.qty}</td>
+                    <td className="px-3 py-2.5 text-center text-gray-500">{li.unit}</td>
+                    <td className="px-4 py-2.5 text-right text-gray-700">{formatCurrency(li.unitPrice)}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-gray-900">{formatCurrency(li.qty * li.unitPrice)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Totals */}
+          <div className="card max-w-sm ml-auto">
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-gray-500">Annual Total</span><span className="font-semibold">{formatCurrency(totalDue)}</span></div>
+              <div className="flex justify-between text-base font-bold border-t border-gray-100 pt-2 mt-2">
+                <span>Monthly Billing</span><span className="text-[#27AE60]">{formatCurrency(monthlyBilling)}/mo</span>
+              </div>
+              <div className="flex justify-between text-sm"><span className="text-gray-500">Margin</span><span className={grossMargin >= s.targetMargin ? 'text-green-600 font-semibold' : 'text-orange-500 font-semibold'}>{formatPercent(grossMargin)}</span></div>
+            </div>
+          </div>
+
+          {notes && (
+            <div className="card">
+              <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">Notes</h3>
+              <p className="text-sm text-gray-600 whitespace-pre-line">{notes}</p>
+            </div>
+          )}
+
+          {/* Link to current revision if one exists */}
+          {(() => {
+            const newerRevision = data.contracts.find(c => c.revisionOf === (existing?.revisionOf ?? existing?.id) && (c.revisionNumber ?? 0) > (existing?.revisionNumber ?? 0));
+            if (!newerRevision) return null;
+            return (
+              <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-xl border border-blue-200">
+                <span className="text-blue-600 text-sm">A newer revision exists:</span>
+                <button onClick={() => navigate(`/quotes/${newerRevision.id}`)} className="text-sm font-semibold text-blue-700 hover:underline">
+                  View {newerRevision.title || `Rev #${newerRevision.revisionNumber}`} →
+                </button>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {!isReadOnly && <div className="max-w-6xl mx-auto px-6 py-6 space-y-5">
 
         {/* ── Quote Title ────────────────────────────────────────────────────── */}
         <input
           className="w-full text-3xl font-bold text-gray-900 bg-transparent border-0 border-b-2 border-transparent focus:border-[#27AE60] focus:outline-none pb-1"
           value={title}
           onChange={e => setTitle(e.target.value)}
+          onBlur={autoSave}
           placeholder="Quote title (e.g. Year Round Exterior Property Maintenance)"
         />
 
@@ -667,7 +867,7 @@ export default function QuoteDetail({ data, setData }: Props) {
             <div className="grid grid-cols-3 gap-3">
               <div className="col-span-2">
                 <label className="label">Client / Company</label>
-                <input className="input" value={clientName} onChange={e => setClientName(e.target.value)} placeholder="Client name" />
+                <input className="input" value={clientName} onChange={e => setClientName(e.target.value)} onBlur={autoSave} placeholder="Client name" />
               </div>
               <div>
                 <label className="label">Property Type</label>
@@ -678,24 +878,24 @@ export default function QuoteDetail({ data, setData }: Props) {
               </div>
               <div className="col-span-3">
                 <label className="label">Street Address</label>
-                <input className="input" value={address} onChange={e => setAddress(e.target.value)} placeholder="Street address" />
+                <input className="input" value={address} onChange={e => setAddress(e.target.value)} onBlur={autoSave} placeholder="Street address" />
               </div>
               <div>
                 <label className="label">City</label>
-                <input className="input" value={city} onChange={e => setCity(e.target.value)} />
+                <input className="input" value={city} onChange={e => setCity(e.target.value)} onBlur={autoSave} />
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <div><label className="label">State</label><input className="input" value={state} onChange={e => setState_(e.target.value)} maxLength={2} placeholder="MN" /></div>
-                <div><label className="label">ZIP</label><input className="input" value={zip} onChange={e => setZip(e.target.value)} /></div>
+                <div><label className="label">State</label><input className="input" value={state} onChange={e => setState_(e.target.value)} onBlur={autoSave} maxLength={2} placeholder="MN" /></div>
+                <div><label className="label">ZIP</label><input className="input" value={zip} onChange={e => setZip(e.target.value)} onBlur={autoSave} /></div>
               </div>
               <div>
                 <label className="label">Email</label>
-                <input className="input" type="email" value={clientEmail} onChange={e => setClientEmail(e.target.value)} />
+                <input className="input" type="email" value={clientEmail} onChange={e => setClientEmail(e.target.value)} onBlur={autoSave} />
               </div>
               <div>
                 <label className="label">Miles from Shop</label>
                 <div className="flex items-center gap-2">
-                  <input className="input" type="number" min="0" step="0.1" value={milesFromShop || ''} onChange={e => setMilesFromShop(parseFloat(e.target.value) || 0)} placeholder="0" />
+                  <input className="input" type="number" min="0" step="0.1" value={milesFromShop || ''} onChange={e => setMilesFromShop(parseFloat(e.target.value) || 0)} onBlur={autoSave} placeholder="0" />
                   {milesFromShop > 0 && <span className="text-xs text-indigo-500 whitespace-nowrap">{((milesFromShop / (s.averageSpeedMph || 30)) * 2).toFixed(1)} hrs RT</span>}
                 </div>
               </div>
@@ -1135,11 +1335,11 @@ export default function QuoteDetail({ data, setData }: Props) {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="label">Notes (internal)</label>
-              <textarea className="input resize-none" rows={4} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Internal notes, scope, exclusions..." />
+              <textarea className="input resize-none" rows={4} value={notes} onChange={e => setNotes(e.target.value)} onBlur={autoSave} placeholder="Internal notes, scope, exclusions..." />
             </div>
             <div>
               <label className="label">Payment Terms</label>
-              <textarea className="input resize-none" rows={4} value={terms} onChange={e => setTerms(e.target.value)} />
+              <textarea className="input resize-none" rows={4} value={terms} onChange={e => setTerms(e.target.value)} onBlur={autoSave} />
             </div>
           </div>
         </div>
@@ -1154,7 +1354,7 @@ export default function QuoteDetail({ data, setData }: Props) {
           )}
           <button onClick={() => navigate('/quotes')} className="btn-secondary px-6 py-3">Cancel</button>
         </div>
-      </div>
+      </div>}
 
       {showCatalog && (
         <CatalogPicker catalog={data.serviceCatalog} onSelect={addFromCatalog} onClose={() => setShowCatalog(false)} />

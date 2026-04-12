@@ -20,6 +20,7 @@ const ALLOWED_ORIGINS = [
   'http://localhost:5176',
   'http://127.0.0.1:5176',
   'https://greensun-estimator-production.up.railway.app',
+  'https://estimator.greensun.co',
 ];
 app.use(cors({
   origin: (origin, callback) => {
@@ -102,8 +103,8 @@ function qboHeaders(accessToken) {
 }
 
 // ── MongoDB ──────────────────────────────────────────────────────────────────
-const MONGODB_URI = process.env.MONGODB_URI ||
-  'mongodb+srv://ivanark:Iv200151!@greensunestimator.akya4pl.mongodb.net/?appName=GreenSunEstimator';
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) throw new Error('MONGODB_URI environment variable is required');
 let mongoClient, db;
 
 async function connectMongo() {
@@ -114,24 +115,111 @@ async function connectMongo() {
   await mongoClient.connect();
   db = mongoClient.db('greensun');
   console.log('Connected to MongoDB');
+  await migrateFromBlob();
+  startChangeStream();
 }
 
-// ── App data persistence (MongoDB) ───────────────────────────────────────────
+// ── Per-collection data model ─────────────────────────────────────────────────
+const ARRAY_COLLECTIONS = [
+  'clients','contracts','jobs','invoices','snowTrips','timeEntries','expenses',
+  'employees','equipment','overhead','fieldSupplies','subcontractors','crews',
+  'projects','requests','leads','futureBudget','contractTemplates',
+  'salesTaxRates','serviceCatalog',
+];
+const COUNTER_KEYS = ['estimateCounter','invoiceCounter','projectCounter','requestCounter','jobCounter','snowTripCounter'];
+
+function stripMongoId(doc) {
+  if (!doc) return doc;
+  const { _id, ...rest } = doc;
+  return rest;
+}
+
+// Assemble AppData from per-collection documents
 async function readAppData() {
   try {
     if (!db) return {};
-    const doc = await db.collection('appdata').findOne({ _id: 'main' });
-    return doc ? doc.data : {};
-  } catch { return {}; }
+    const collReads = ARRAY_COLLECTIONS.map(col =>
+      db.collection(col).find({}).toArray().then(docs => [col, docs.map(stripMongoId)])
+    );
+    const [colEntries, settings, counters] = await Promise.all([
+      Promise.all(collReads),
+      db.collection('settings').findOne({ _id: 'settings' }),
+      db.collection('counters').findOne({ _id: 'counters' }),
+    ]);
+    const result = Object.fromEntries(colEntries);
+    if (settings) result.settings = stripMongoId(settings);
+    if (counters)  Object.assign(result, stripMongoId(counters));
+    return result;
+  } catch (err) {
+    console.error('readAppData error:', err);
+    return {};
+  }
 }
 
+// Upsert an entire AppData blob into per-collection docs (used for import/migration)
 async function writeAppData(data) {
   if (!db) return;
-  await db.collection('appdata').updateOne(
-    { _id: 'main' },
-    { $set: { data, updatedAt: new Date() } },
-    { upsert: true }
-  );
+  const ops = [];
+  for (const col of ARRAY_COLLECTIONS) {
+    const items = data[col] || [];
+    for (const item of items) {
+      if (!item.id) continue;
+      ops.push(db.collection(col).replaceOne({ _id: item.id }, { _id: item.id, ...item }, { upsert: true }));
+    }
+  }
+  if (data.settings) {
+    ops.push(db.collection('settings').replaceOne({ _id: 'settings' }, { _id: 'settings', ...data.settings }, { upsert: true }));
+  }
+  const counters = {};
+  for (const k of COUNTER_KEYS) { if (data[k] !== undefined) counters[k] = data[k]; }
+  if (Object.keys(counters).length) {
+    ops.push(db.collection('counters').replaceOne({ _id: 'counters' }, { _id: 'counters', ...counters }, { upsert: true }));
+  }
+  await Promise.all(ops);
+}
+
+// One-time migration from old single-blob appdata collection
+async function migrateFromBlob() {
+  const clientCount = await db.collection('clients').countDocuments();
+  if (clientCount > 0) return; // already migrated
+
+  const oldDoc = await db.collection('appdata').findOne({ _id: 'main' });
+  if (!oldDoc?.data) return;
+
+  console.log('Migrating from single-blob to per-collection storage...');
+  await writeAppData(oldDoc.data);
+  console.log('Migration complete.');
+}
+
+// ── SSE / real-time push ──────────────────────────────────────────────────────
+const sseClients = new Set();
+// Map of token -> { expiry } for SSE authentication
+const sseTokens = new Map();
+
+function broadcastSSE(event) {
+  const payload = `data: ${JSON.stringify(event)}\n\n`;
+  sseClients.forEach(res => {
+    try { res.write(payload); } catch { sseClients.delete(res); }
+  });
+}
+
+function startChangeStream() {
+  try {
+    const stream = db.watch([], { fullDocument: 'updateLookup' });
+    stream.on('change', change => {
+      const col = change.ns?.coll;
+      if (!ARRAY_COLLECTIONS.includes(col) && col !== 'settings' && col !== 'counters') return;
+      const doc = change.fullDocument ? stripMongoId(change.fullDocument) : undefined;
+      broadcastSSE({ collection: col, operation: change.operationType, doc, docId: change.documentKey?._id });
+    });
+    stream.on('error', err => {
+      console.error('Change stream error — will retry in 10 s:', err.message);
+      setTimeout(startChangeStream, 10000);
+    });
+    console.log('MongoDB change stream active');
+  } catch (err) {
+    console.error('startChangeStream failed:', err.message);
+  }
 }
 
 // ── Azure AD JWT validation ──────────────────────────────────────────────────
@@ -440,6 +528,78 @@ app.delete('/api/allowlist/:email', authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Per-record CRUD ───────────────────────────────────────────────────────────
+app.put('/api/:collection/:id', authMiddleware, async (req, res) => {
+  const { collection, id } = req.params;
+  if (!ARRAY_COLLECTIONS.includes(collection)) return res.status(400).json({ error: 'Unknown collection' });
+  try {
+    await db.collection(collection).replaceOne({ _id: id }, { _id: id, ...req.body }, { upsert: true });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/:collection/:id', authMiddleware, async (req, res) => {
+  const { collection, id } = req.params;
+  if (!ARRAY_COLLECTIONS.includes(collection)) return res.status(400).json({ error: 'Unknown collection' });
+  try {
+    await db.collection(collection).deleteOne({ _id: id });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/settings', authMiddleware, async (req, res) => {
+  try {
+    await db.collection('settings').replaceOne({ _id: 'settings' }, { _id: 'settings', ...req.body }, { upsert: true });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/counters', authMiddleware, async (req, res) => {
+  try {
+    await db.collection('counters').updateOne({ _id: 'counters' }, { $set: req.body }, { upsert: true });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── SSE: issue a short-lived stream token ─────────────────────────────────────
+app.post('/api/stream-token', authMiddleware, (req, res) => {
+  const crypto = require('crypto');
+  const token = crypto.randomBytes(20).toString('hex');
+  sseTokens.set(token, { expiry: Date.now() + 24 * 60 * 60 * 1000 }); // 24 h
+  res.json({ token });
+});
+
+// ── SSE: real-time event stream ───────────────────────────────────────────────
+app.get('/api/stream', async (req, res) => {
+  // In dev, skip auth. In prod, require a stream token as query param.
+  if (process.env.NODE_ENV !== 'development') {
+    const token = req.query.token;
+    const entry = token ? sseTokens.get(token) : null;
+    if (!entry || entry.expiry < Date.now()) {
+      return res.status(401).json({ error: 'Invalid or expired stream token' });
+    }
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // disable Nginx buffering on Railway
+  res.flushHeaders();
+
+  // Send a connected event so the client knows it's live
+  res.write('data: {"type":"connected"}\n\n');
+
+  const heartbeat = setInterval(() => {
+    try { res.write(': heartbeat\n\n'); } catch { clearInterval(heartbeat); }
+  }, 25000);
+
+  sseClients.add(res);
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseClients.delete(res);
+  });
+});
+
 // ── Email: Send estimate for signature ────────────────────────────────────────
 const resend = new Resend(process.env.RESEND_API_KEY);
 const RAILWAY_URL = process.env.RAILWAY_URL || 'https://greensun-estimator-production.up.railway.app';
@@ -620,8 +780,83 @@ app.get('/api/signature/:contractId', authMiddleware, async (req, res) => {
   }
 });
 
+// ── Daily automatic backup ────────────────────────────────────────────────────
+async function runDailyBackup() {
+  try {
+    const data = await readAppData();
+    const hasContent = (data.employees?.length ?? 0) > 0
+      || (data.contracts?.length ?? 0) > 0
+      || (data.clients?.length ?? 0) > 0;
+    if (!hasContent) return; // nothing worth backing up yet
+
+    const label = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    await db.collection('backups').updateOne(
+      { label },
+      { $set: { label, data, savedAt: new Date() } },
+      { upsert: true }
+    );
+
+    // Keep only the last 60 daily backups (2 months)
+    const allBackups = await db.collection('backups')
+      .find({}, { projection: { _id: 1, label: 1 } })
+      .sort({ label: -1 })
+      .toArray();
+    if (allBackups.length > 60) {
+      const toDelete = allBackups.slice(60).map(b => b._id);
+      await db.collection('backups').deleteMany({ _id: { $in: toDelete } });
+    }
+
+    console.log(`Daily backup saved: ${label}`);
+  } catch (err) {
+    console.error('Daily backup failed:', err.message);
+  }
+}
+
+function scheduleDailyBackup() {
+  // Run once immediately on startup, then every 24 hours
+  runDailyBackup();
+  setInterval(runDailyBackup, 24 * 60 * 60 * 1000);
+}
+
+// ── Backup restore endpoint (admin use) ───────────────────────────────────────
+app.get('/api/backups', authMiddleware, async (_req, res) => {
+  try {
+    const list = await db.collection('backups')
+      .find({}, { projection: { label: 1, savedAt: 1 } })
+      .sort({ label: -1 })
+      .toArray();
+    res.json(list.map(b => ({ label: b.label, savedAt: b.savedAt })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/backups/:label', authMiddleware, async (req, res) => {
+  try {
+    const backup = await db.collection('backups').findOne({ label: req.params.label });
+    if (!backup) return res.status(404).json({ error: 'Backup not found' });
+    res.json(backup.data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Serve React app (production web) ─────────────────────────────────────────
+const distPath = path.join(__dirname, '../dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  // All other GET requests serve the React app (HashRouter handles client routing)
+  app.get('*', (req, res) => {
+    if (req.path.startsWith('/api/') || req.path.startsWith('/sign/') || req.path.startsWith('/auth/')) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 connectMongo().then(() => {
+  scheduleDailyBackup();
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`GreenSun QBO server running on http://localhost:${PORT}`);
   });

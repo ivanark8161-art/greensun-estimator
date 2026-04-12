@@ -31,6 +31,7 @@ const CONTRACT_STATUS_BADGE: Record<ContractStatus, string> = {
   estimate: 'badge-yellow', draft: 'badge-gray', awaiting_response: 'badge-yellow',
   changes_requested: 'badge-orange', approved: 'badge-green',
   active: 'badge-green', closed: 'badge-gray', lost: 'badge-red',
+  converted: 'badge-green', rejected: 'badge-red',
 };
 
 // ─── Blank project ─────────────────────────────────────────────────────────────

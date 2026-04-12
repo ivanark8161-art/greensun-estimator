@@ -15,7 +15,7 @@ function blankContact(): Omit<ClientContact,'id'> {
   return { title:'', firstName:'', lastName:'', role:'', phone:'', email:'', isPrimary: false };
 }
 function blankProperty(): Omit<ClientProperty,'id'> {
-  return { street1:'', street2:'', city:'', state:'MN', zip:'', isBillingAddress: true, contactIds:[], notes:'' };
+  return { name:'', street1:'', street2:'', city:'', state:'MN', zip:'', isBillingAddress: true, contactIds:[], notes:'' };
 }
 function blankClient(): Omit<Client,'id'|'createdAt'> {
   return { companyName:'', type:'commercial', contacts:[], properties:[], leadSource:'', tags:[], notes:'' };
@@ -93,7 +93,7 @@ function ClientDetailPage({ data, setData }: Props) {
 
   // ── Properties ──
   function openAddProperty() { setEditingProperty(null); setPropertyForm(blankProperty()); setShowAddProperty(true); }
-  function openEditProperty(p: ClientProperty) { setEditingProperty(p); setPropertyForm({ street1:p.street1, street2:p.street2, city:p.city, state:p.state, zip:p.zip, taxRateId:p.taxRateId, isBillingAddress:p.isBillingAddress, contactIds:p.contactIds, notes:p.notes }); setShowAddProperty(true); }
+  function openEditProperty(p: ClientProperty) { setEditingProperty(p); setPropertyForm({ name:p.name??'', street1:p.street1, street2:p.street2, city:p.city, state:p.state, zip:p.zip, taxRateId:p.taxRateId, isBillingAddress:p.isBillingAddress, contactIds:p.contactIds, notes:p.notes }); setShowAddProperty(true); }
   function saveProperty() {
     if (!propertyForm.street1 && !propertyForm.city) { alert('Address required'); return; }
     const newProp: ClientProperty = { id: editingProperty?.id ?? `prop_${Date.now()}`, ...propertyForm };
@@ -171,6 +171,7 @@ function ClientDetailPage({ data, setData }: Props) {
                     <div className="flex items-start gap-3">
                       <span className="text-gray-300 mt-0.5">📍</span>
                       <div>
+                        {p.name && <p className="text-sm font-semibold text-gray-900">{p.name}</p>}
                         <p className="text-sm font-medium text-gray-800">{[p.street1, p.street2].filter(Boolean).join(' ') || '(no street)'}</p>
                         <p className="text-xs text-gray-400">{[p.city, p.state, p.zip].filter(Boolean).join(', ')}</p>
                         {p.isBillingAddress && <span className="text-[10px] font-semibold text-blue-500 uppercase tracking-wide">Billing Address</span>}
@@ -507,6 +508,10 @@ function ClientDetailPage({ data, setData }: Props) {
         <Modal title={editingProperty ? 'Edit Property' : 'New Property'} onClose={() => setShowAddProperty(false)}>
           <div className="space-y-3">
             <div>
+              <label className="label">Property name</label>
+              <input className="input" placeholder="Main Office, Parking Lot, North Entrance…" value={propertyForm.name} onChange={e => setPropertyForm(f => ({...f, name: e.target.value}))} />
+            </div>
+            <div>
               <label className="label">Street address *</label>
               <input className="input" placeholder="123 Main St" value={propertyForm.street1} onChange={e => setPropertyForm(f => ({...f, street1: e.target.value}))} />
             </div>
@@ -558,7 +563,7 @@ function ClientDetailPage({ data, setData }: Props) {
 function CreateClientPage({ data, setData }: Props) {
   const navigate = useNavigate();
   const [primaryContact, setPrimaryContact] = useState<Omit<ClientContact,'id'>>({ title:'', firstName:'', lastName:'', role:'', phone:'', email:'', isPrimary:true });
-  const [property, setProperty] = useState<Omit<ClientProperty,'id'>>({ street1:'', street2:'', city:'', state:'MN', zip:'', isBillingAddress:true, contactIds:[], notes:'' });
+  const [property, setProperty] = useState<Omit<ClientProperty,'id'>>({ name:'', street1:'', street2:'', city:'', state:'MN', zip:'', isBillingAddress:true, contactIds:[], notes:'' });
   const [companyName, setCompanyName] = useState('');
   const [clientType, setClientType] = useState<Client['type']>('commercial');
   const [leadSource, setLeadSource] = useState<LeadSource>('');
@@ -652,6 +657,10 @@ function CreateClientPage({ data, setData }: Props) {
           <p className="font-semibold text-gray-800 mb-1">Property address</p>
           <p className="text-xs text-gray-400 mb-4">Primary service location</p>
           <div className="space-y-3">
+            <div>
+              <label className="label">Property name</label>
+              <input className="input" value={property.name} onChange={e => setProperty(f => ({...f, name: e.target.value}))} placeholder="Main Office, Parking Lot, North Entrance…" />
+            </div>
             <div>
               <label className="label">Street 1</label>
               <input className="input" value={property.street1} onChange={e => setProperty(f => ({...f, street1: e.target.value}))} placeholder="10600 Wayzata Boulevard" />

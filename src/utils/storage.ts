@@ -258,17 +258,26 @@ export interface SSEEvent {
 }
 
 export function subscribeToStream(onEvent: (e: SSEEvent) => void): () => void {
-  const authHeaders = getAuthHeaders() as Record<string, string>;
-  const token = (authHeaders['Authorization'] ?? '').replace('Bearer ', '').trim();
-  const url = `${SERVER_URL}/api/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-
   let es: EventSource | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
 
-  function connect() {
+  async function connect() {
     if (closed) return;
     try {
+      // Get a short-lived stream token from the server (required in production)
+      const tokenRes = await fetch(`${SERVER_URL}/api/stream-token`, {
+        method: 'POST',
+        headers: { ...(getAuthHeaders() as Record<string, string>) },
+      });
+      if (!tokenRes.ok) {
+        if (!closed) retryTimer = setTimeout(connect, 10000);
+        return;
+      }
+      const { token } = await tokenRes.json() as { token: string };
+      if (closed) return;
+
+      const url = `${SERVER_URL}/api/stream?token=${encodeURIComponent(token)}`;
       es = new EventSource(url);
       es.onmessage = ev => {
         try { onEvent(JSON.parse(ev.data) as SSEEvent); } catch { /* ignore */ }
@@ -279,7 +288,7 @@ export function subscribeToStream(onEvent: (e: SSEEvent) => void): () => void {
         if (!closed) retryTimer = setTimeout(connect, 5000);
       };
     } catch {
-      if (!closed) retryTimer = setTimeout(connect, 5000);
+      if (!closed) retryTimer = setTimeout(connect, 10000);
     }
   }
 

@@ -122,28 +122,25 @@ export default function App() {
   const loadAndSync = useCallback(async () => {
     try {
       const serverData = await loadFromServer();
-      const local = loadData();
-      const localTime  = local.savedAt      ? new Date(local.savedAt).getTime()      : 0;
-      const serverTime = serverData?.savedAt ? new Date(serverData.savedAt).getTime() : 0;
 
-      const localHasRealData = (local.contracts?.length ?? 0) > 2
-        || (local.clients?.length  ?? 0) > 0
-        || (local.jobs?.length     ?? 0) > 0
-        || (local.requests?.length ?? 0) > 0;
-
-      if (serverData && serverTime > localTime) {
+      if (serverData) {
+        // Server has real data — always use it. Server is the source of truth.
+        // Never overwrite it with local data on load (would erase other users' changes).
         setDataRaw(serverData);
         prevDataRef.current = serverData;
         saveData(serverData);
-      } else if (localHasRealData) {
-        prevDataRef.current = local;
-        const blank: AppData = { ...local, clients: [], contracts: [], jobs: [], invoices: [], snowTrips: [], timeEntries: [], expenses: [], employees: [], equipment: [], overhead: [], fieldSupplies: [], subcontractors: [], crews: [], projects: [], requests: [], leads: [], futureBudget: [], contractTemplates: [], salesTaxRates: [], serviceCatalog: [] };
-        const ok = await saveChangesAsync(blank, local);
-        if (!ok) setSyncStatus('error');
-      } else if (serverData) {
-        setDataRaw(serverData);
-        prevDataRef.current = serverData;
-        saveData(serverData);
+      } else {
+        // Server is empty — first-time setup. Push local data up.
+        const local = loadData();
+        const localHasRealData = (local.contracts?.length ?? 0) > 0
+          || (local.clients?.length  ?? 0) > 0
+          || (local.employees?.length ?? 0) > 0;
+        if (localHasRealData) {
+          prevDataRef.current = local;
+          const blank: AppData = { ...local, clients: [], contracts: [], jobs: [], invoices: [], snowTrips: [], timeEntries: [], expenses: [], employees: [], equipment: [], overhead: [], fieldSupplies: [], subcontractors: [], crews: [], projects: [], requests: [], leads: [], futureBudget: [], contractTemplates: [], salesTaxRates: [], serviceCatalog: [] };
+          const ok = await saveChangesAsync(blank, local);
+          if (!ok) setSyncStatus('error');
+        }
       }
     } catch {
       // Server unreachable — local data already loaded

@@ -108,10 +108,10 @@ function LandscapingTab({ data, setData, openProjectId }: Props & { openProjectI
     setForm({ ...form, lineItems: items, ...calcLIT(items) });
   }
 
-  // Active = not estimate, not invoiced (archived), not lost
-  const activeProjects   = data.projects.filter(p => ['approved','in_progress','completed'].includes(p.status));
-  const archivedProjects = data.projects.filter(p => p.status === 'invoiced');
-  const totalValue       = activeProjects.reduce((s, p) => s + p.subtotalRevenue, 0);
+  const activeProjects    = data.projects.filter(p => ['approved','in_progress'].includes(p.status));
+  const completedProjects = data.projects.filter(p => p.status === 'completed');
+  const archivedProjects  = data.projects.filter(p => p.status === 'invoiced');
+  const totalValue        = activeProjects.reduce((s, p) => s + p.subtotalRevenue, 0);
 
   function ProjectRow({ p, archived = false }: { p: LandscapingProject; archived?: boolean }) {
     const jc = calcJobCostingForProject(p, data);
@@ -167,6 +167,27 @@ function LandscapingTab({ data, setData, openProjectId }: Props & { openProjectI
               {activeProjects.map(p => <ProjectRow key={p.id} p={p} />)}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Completed section */}
+      {completedProjects.length > 0 && (
+        <div className="mb-4">
+          <p className="text-sm font-semibold text-gray-500 mb-2">Completed ({completedProjects.length})</p>
+          <div className="card p-0 overflow-hidden opacity-80">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  {['#','Client','Description','Revenue','Est. Cost','Margin','Status',''].map(h => (
+                    <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {completedProjects.map(p => <ProjectRow key={p.id} p={p} />)}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

@@ -1,5 +1,15 @@
 export type SeasonType = 'spring' | 'summer' | 'fall' | 'winter';
 
+// ─── Accounting Codes ─────────────────────────────────────────────────────────
+// Labor codes (01-xxx) are stored here as freeform entries.
+// Codes for resources 2-5 are stored directly on each resource item (costCode field).
+export interface AccountingCode {
+  id: string;
+  code: string;   // e.g. "01-001"
+  name: string;   // e.g. "Lawn Maintenance Labor"
+  notes: string;
+}
+
 // ─── Service Catalog ──────────────────────────────────────────────────────────
 export type ServiceCategory = 'maintenance' | 'snow' | 'landscaping' | 'other';
 
@@ -15,6 +25,7 @@ export interface ServiceCatalogItem {
   equipmentIds: string[];      // equipment used (reference only)
   futureEquipmentIds?: string[]; // planned equipment from Growth Planner
   targetMargin?: number;       // per-service target margin % (overrides global if set)
+  laborCodeId?: string;        // AccountingCode.id — which 01-xxx code this service maps to
   taxable: boolean;
   notes: string;
 }
@@ -129,6 +140,7 @@ export interface Equipment {
   paymentType: 'paid_in_full' | 'monthly_payment';
   monthlyPaymentAmount: number;  // actual loan/lease payment (used for totals when paymentType = monthly_payment)
   seasons: SeasonType[];
+  costCode?: string;             // e.g. "04-001" — assigned in Accounting Codes tab
   notes: string;
 }
 
@@ -152,6 +164,7 @@ export interface OverheadItem {
   category: OverheadCategory;
   name: string;
   monthlyCost: number;
+  costCode?: string;   // e.g. "05-001"
   notes: string;
 }
 
@@ -163,6 +176,7 @@ export interface FieldSupply {
   unit: string;
   unitCost: number;
   monthlyUsage: number;
+  costCode?: string;   // e.g. "02-001"
 }
 
 // ─── Contracts ───────────────────────────────────────────────────────────────
@@ -218,6 +232,7 @@ export interface Contract {
   costingCodes?: JobCostingCodes;        // populated when job is activated
   taxRateId?: string;                // references SalesTaxRate.id
   downPaymentRequired: number;       // deposit required upfront
+  contractLength?: '1_year' | '2_year' | '3_year' | 'custom'; // auto-sets endDate for maintenance
   notes: string;
   terms: string;
   createdAt: string;
@@ -348,6 +363,7 @@ export interface Subcontractor {
   specialty: string;
   rateType: 'hourly' | 'daily' | 'project';
   rate: number;
+  costCode?: string;   // e.g. "03-001"
   notes: string;
 }
 
@@ -598,6 +614,7 @@ export interface AppData {
   crews: Crew[];
   futureBudget: FutureBudgetItem[];
   contractTemplates: ContractTemplate[];
+  accountingCodes: AccountingCode[];
   settings: AppSettings;
   estimateCounter: number;
   invoiceCounter: number;

@@ -216,6 +216,9 @@ export default function QuoteDetail({ data, setData }: Props) {
   const [activeMonths,   setActiveMonths]   = useState<Month[]>(existing?.activeMonths ?? ['apr','may','jun','jul','aug','sep','oct']);
   const [includeSnow,    setIncludeSnow]    = useState(false);
   const [crewId,         setCrewId]         = useState(existing?.crewId ?? '');
+  const [startDate,      setStartDate]      = useState(existing?.startDate ?? '');
+  const [endDate,        setEndDate]        = useState(existing?.endDate ?? '');
+  const [contractLength, setContractLength] = useState<'1_year' | '2_year' | '3_year' | 'custom'>(existing?.contractLength ?? 'custom');
 
   const [lineItems, setLineItems] = useState<EstimateLineItem[]>(existing?.lineItems ?? []);
   const [taxRate,        setTaxRate]        = useState(existing?.taxRate            ?? 0);
@@ -403,8 +406,9 @@ export default function QuoteDetail({ data, setData }: Props) {
       estimatedHoursPerVisit: derivedHrs > 0 ? derivedHrs : 2,
       crewId: crewId || undefined,
       taxRate, taxRateId: taxRateId || undefined, discountAmount, additionalOverheadPct: overheadPct, consumablesPct, downPaymentRequired: downPaymentReq,
-      startDate: existing?.startDate ?? '',
-      endDate: existing?.endDate ?? '',
+      startDate,
+      endDate,
+      contractLength,
       status,
       notes, terms,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
@@ -1050,6 +1054,76 @@ export default function QuoteDetail({ data, setData }: Props) {
             </div>
           </div>
         )}
+
+        {/* ── Contract Dates ────────────────────────────────────────────────── */}
+        <div className="card">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">Contract Dates</h3>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="label">Start Date</label>
+              <input
+                className="input"
+                type="date"
+                value={startDate}
+                onChange={e => {
+                  const d = e.target.value;
+                  setStartDate(d);
+                  // Auto-calc end date when length is set
+                  if (d && contractLength !== 'custom') {
+                    const years = contractLength === '1_year' ? 1 : contractLength === '2_year' ? 2 : 3;
+                    const end = new Date(d);
+                    end.setFullYear(end.getFullYear() + years);
+                    end.setDate(end.getDate() - 1);
+                    setEndDate(end.toISOString().split('T')[0]);
+                  }
+                }}
+              />
+            </div>
+            <div>
+              <label className="label">Contract Length</label>
+              <select
+                className="input"
+                value={contractLength}
+                onChange={e => {
+                  const len = e.target.value as typeof contractLength;
+                  setContractLength(len);
+                  // Auto-calc end date from current startDate
+                  if (startDate && len !== 'custom') {
+                    const years = len === '1_year' ? 1 : len === '2_year' ? 2 : 3;
+                    const end = new Date(startDate);
+                    end.setFullYear(end.getFullYear() + years);
+                    end.setDate(end.getDate() - 1);
+                    setEndDate(end.toISOString().split('T')[0]);
+                  }
+                }}
+              >
+                <option value="1_year">1 Year</option>
+                <option value="2_year">2 Years</option>
+                <option value="3_year">3 Years</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">End Date</label>
+              <input
+                className="input"
+                type="date"
+                value={endDate}
+                onChange={e => { setEndDate(e.target.value); setContractLength('custom'); }}
+              />
+            </div>
+          </div>
+          {startDate && endDate && (
+            <p className="text-xs text-gray-400 mt-2">
+              {(() => {
+                const ms   = new Date(endDate).getTime() - new Date(startDate).getTime();
+                const days = Math.round(ms / (1000 * 60 * 60 * 24));
+                const months = Math.round(days / 30.44);
+                return `${months} months (${days} days)`;
+              })()}
+            </p>
+          )}
+        </div>
 
         {/* ── Product / Service (Line Items) ──────────────────────────────── */}
         <div className="card p-0">

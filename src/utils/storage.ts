@@ -12,7 +12,7 @@ const ARRAY_COLLECTIONS = [
   'clients','contracts','jobs','invoices','snowTrips','timeEntries','expenses',
   'employees','equipment','overhead','fieldSupplies','subcontractors','crews',
   'projects','requests','leads','futureBudget','contractTemplates',
-  'salesTaxRates','serviceCatalog',
+  'salesTaxRates','serviceCatalog','accountingCodes',
 ] as const;
 
 const COUNTER_KEYS = [
@@ -156,6 +156,7 @@ function applyMigrations(parsed: AppData): AppData {
     expenses:           parsed.expenses           ?? [],
     futureBudget:       parsed.futureBudget       ?? [],
     contractTemplates:  parsed.contractTemplates  ?? DEFAULT_DATA.contractTemplates,
+    accountingCodes:    parsed.accountingCodes    ?? [],
     invoiceCounter:     parsed.invoiceCounter     ?? 1,
     projectCounter:     parsed.projectCounter     ?? 1,
     requestCounter:     parsed.requestCounter     ?? 0,

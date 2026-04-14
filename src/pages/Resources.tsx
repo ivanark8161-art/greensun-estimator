@@ -3,13 +3,14 @@ import type {
   AppData, Equipment, Employee, OverheadItem, FieldSupply,
   SeasonType, OverheadCategory, ServiceCatalogItem, ServiceCategory,
   ContractTemplate, ContractTemplateType, SalesTaxRate, Subcontractor,
+  AccountingCode,
 } from '../types';
 import { saveData } from '../utils/storage';
 import { formatCurrency, formatPercent, calcMonthlyLaborCost } from '../utils/calculations';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 
-type Tab = 'overview' | 'rates' | 'labor' | 'material' | 'subcontractors' | 'equipment' | 'overhead' | 'efficiencies' | 'contracts';
+type Tab = 'overview' | 'rates' | 'labor' | 'material' | 'subcontractors' | 'equipment' | 'overhead' | 'efficiencies' | 'contracts' | 'accounting';
 
 interface Props { data: AppData; setData: (d: AppData) => void }
 
@@ -528,6 +529,18 @@ function RatesTab({ data, setData }: Props) {
                   <option value="trip">per trip</option>
                   <option value="month">per month</option>
                 </select>
+              </div>
+              <div className="col-span-2">
+                <label className="label">Labor Cost Code (01-xxx)</label>
+                <select className="input" value={activeForm.laborCodeId ?? ''} onChange={e => patch({ laborCodeId: e.target.value || undefined })}>
+                  <option value="">— Not mapped —</option>
+                  {data.accountingCodes.map(c => (
+                    <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
+                  ))}
+                </select>
+                {data.accountingCodes.length === 0 && (
+                  <p className="text-xs text-gray-400 mt-1">No labor codes yet — create them in the Accounting Codes tab.</p>
+                )}
               </div>
             </div>
           </div>
@@ -1517,6 +1530,223 @@ function ContractsTab({ data, setData }: Props) {
   );
 }
 
+// ─── ACCOUNTING CODES TAB ─────────────────────────────────────────────────────
+// 01 - Labor: freeform codes managed here
+// 02 - Materials: one code per FieldSupply item
+// 03 - Subcontractors: one code per Subcontractor
+// 04 - Equipment: one code per Equipment item
+// 05 - Other/Overhead: one code per OverheadItem
+
+
+function nextCode(prefix: string, existing: string[]): string {
+  const nums = existing
+    .filter(c => c.startsWith(`${prefix}-`))
+    .map(c => parseInt(c.split('-')[1] ?? '0', 10))
+    .filter(n => !isNaN(n));
+  const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
+  return `${prefix}-${String(next).padStart(3, '0')}`;
+}
+
+function AccountingCodesTab({ data, setData }: Props) {
+  const [editingCode, setEditingCode] = useState<AccountingCode | null>(null);
+  const [showLaborModal, setShowLaborModal] = useState(false);
+  const [laborForm, setLaborForm] = useState<{ code: string; name: string; notes: string }>({ code: '', name: '', notes: '' });
+
+  const allCodes = data.accountingCodes ?? [];
+  const allEqCodes    = allCodes.map(c => c.code);
+
+  function openLaborModal(existing?: AccountingCode) {
+    if (existing) {
+      setEditingCode(existing);
+      setLaborForm({ code: existing.code, name: existing.name, notes: existing.notes });
+    } else {
+      setEditingCode(null);
+      setLaborForm({ code: nextCode('01', allEqCodes), name: '', notes: '' });
+    }
+    setShowLaborModal(true);
+  }
+
+  function saveLaborCode() {
+    if (!laborForm.code.trim() || !laborForm.name.trim()) { alert('Code and name required'); return; }
+    let updated: AppData;
+    if (editingCode) {
+      updated = { ...data, accountingCodes: data.accountingCodes.map(c => c.id === editingCode.id ? { ...editingCode, ...laborForm } : c) };
+    } else {
+      updated = { ...data, accountingCodes: [...data.accountingCodes, { id: `ac_${Date.now()}`, ...laborForm }] };
+    }
+    setData(updated); saveData(updated); setShowLaborModal(false);
+  }
+
+  function deleteLaborCode(id: string) {
+    if (!confirm('Delete this accounting code?')) return;
+    const updated = { ...data, accountingCodes: data.accountingCodes.filter(c => c.id !== id) };
+    setData(updated); saveData(updated);
+  }
+
+  // Inline code editor for resource items (2-5)
+  function ResourceCodeRow({ label, currentCode, onSave }: { label: string; currentCode?: string; onSave: (code: string) => void }) {
+    const [editing, setEditing] = useState(false);
+    const [val, setVal] = useState(currentCode ?? '');
+    return (
+      <div className="flex items-center justify-between py-2.5 border-b border-gray-100 last:border-0">
+        <p className="text-sm text-gray-800 flex-1">{label}</p>
+        {editing ? (
+          <div className="flex items-center gap-2">
+            <input
+              className="input w-28 text-sm py-1"
+              value={val}
+              onChange={e => setVal(e.target.value)}
+              placeholder="e.g. 04-001"
+              autoFocus
+            />
+            <button className="btn-primary text-xs py-1 px-2" onClick={() => { onSave(val.trim()); setEditing(false); }}>Save</button>
+            <button className="btn-secondary text-xs py-1 px-2" onClick={() => { setVal(currentCode ?? ''); setEditing(false); }}>Cancel</button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3">
+            {currentCode
+              ? <span className="text-xs font-mono font-bold bg-gray-100 text-gray-700 px-2 py-1 rounded">{currentCode}</span>
+              : <span className="text-xs text-gray-400 italic">No code</span>
+            }
+            <button className="text-xs text-[#27AE60] hover:underline" onClick={() => { setVal(currentCode ?? ''); setEditing(true); }}>
+              {currentCode ? 'Edit' : 'Assign'}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function saveEquipmentCode(id: string, code: string) {
+    const updated = { ...data, equipment: data.equipment.map(e => e.id === id ? { ...e, costCode: code } : e) };
+    setData(updated); saveData(updated);
+  }
+  function saveSupplyCode(id: string, code: string) {
+    const updated = { ...data, fieldSupplies: data.fieldSupplies.map(f => f.id === id ? { ...f, costCode: code } : f) };
+    setData(updated); saveData(updated);
+  }
+  function saveSubcontractorCode(id: string, code: string) {
+    const updated = { ...data, subcontractors: data.subcontractors.map(s => s.id === id ? { ...s, costCode: code } : s) };
+    setData(updated); saveData(updated);
+  }
+  function saveOverheadCode(id: string, code: string) {
+    const updated = { ...data, overhead: data.overhead.map(o => o.id === id ? { ...o, costCode: code } : o) };
+    setData(updated); saveData(updated);
+  }
+
+  return (
+    <div className="space-y-6 max-w-3xl">
+      <p className="text-sm text-gray-500">
+        Assign accounting codes to every resource. Labor codes (01-xxx) are created freely.
+        For all other categories, each resource item gets its own code.
+        These codes appear on projections, time entries, and expense reports.
+      </p>
+
+      {/* 01 — Labor */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-sm font-bold text-gray-800">01 — Labor</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Create codes for different labor types. Link them to services in the Rates tab.</p>
+          </div>
+          <button className="btn-primary text-sm" onClick={() => openLaborModal()}>+ Add Code</button>
+        </div>
+        {allCodes.filter(c => c.code.startsWith('01')).length === 0 ? (
+          <p className="text-sm text-gray-400 italic py-2">No labor codes yet. Add your first one above.</p>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {allCodes.filter(c => c.code.startsWith('01')).map(c => (
+              <div key={c.id} className="flex items-center gap-3 py-2.5">
+                <span className="text-xs font-mono font-bold bg-green-100 text-green-700 px-2 py-1 rounded w-16 text-center shrink-0">{c.code}</span>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-gray-900">{c.name}</p>
+                  {c.notes && <p className="text-xs text-gray-400">{c.notes}</p>}
+                </div>
+                <button className="text-xs text-[#27AE60] hover:underline" onClick={() => openLaborModal(c)}>Edit</button>
+                <button className="text-xs text-red-500 hover:underline" onClick={() => deleteLaborCode(c.id)}>Delete</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 02 — Materials (Field Supplies) */}
+      <div className="card">
+        <h3 className="text-sm font-bold text-gray-800 mb-1">02 — Materials</h3>
+        <p className="text-xs text-gray-400 mb-4">One code per field supply item. Suggested format: 02-001, 02-002…</p>
+        {data.fieldSupplies.length === 0
+          ? <p className="text-sm text-gray-400 italic">No field supply items — add them in the 2-Material tab.</p>
+          : data.fieldSupplies.map(f => (
+              <ResourceCodeRow key={f.id} label={`${f.name} (${f.category})`} currentCode={f.costCode} onSave={code => saveSupplyCode(f.id, code)} />
+            ))
+        }
+      </div>
+
+      {/* 03 — Subcontractors */}
+      <div className="card">
+        <h3 className="text-sm font-bold text-gray-800 mb-1">03 — Subcontractors</h3>
+        <p className="text-xs text-gray-400 mb-4">One code per subcontractor. Suggested format: 03-001, 03-002…</p>
+        {data.subcontractors.length === 0
+          ? <p className="text-sm text-gray-400 italic">No subcontractors — add them in the 3-Subcontractors tab.</p>
+          : data.subcontractors.map(s => (
+              <ResourceCodeRow key={s.id} label={`${s.companyName}${s.contactName ? ` (${s.contactName})` : ''}`} currentCode={s.costCode} onSave={code => saveSubcontractorCode(s.id, code)} />
+            ))
+        }
+      </div>
+
+      {/* 04 — Equipment */}
+      <div className="card">
+        <h3 className="text-sm font-bold text-gray-800 mb-1">04 — Equipment</h3>
+        <p className="text-xs text-gray-400 mb-4">One code per equipment item. Suggested format: 04-001, 04-002…</p>
+        {data.equipment.length === 0
+          ? <p className="text-sm text-gray-400 italic">No equipment — add items in the 4-Equipment tab.</p>
+          : data.equipment.map(e => (
+              <ResourceCodeRow key={e.id} label={e.name} currentCode={e.costCode} onSave={code => saveEquipmentCode(e.id, code)} />
+            ))
+        }
+      </div>
+
+      {/* 05 — Other / Overhead */}
+      <div className="card">
+        <h3 className="text-sm font-bold text-gray-800 mb-1">05 — Other / Overhead</h3>
+        <p className="text-xs text-gray-400 mb-4">One code per overhead item. Suggested format: 05-001, 05-002…</p>
+        {data.overhead.length === 0
+          ? <p className="text-sm text-gray-400 italic">No overhead items — add them in the 5-Other/Overhead tab.</p>
+          : data.overhead.map(o => (
+              <ResourceCodeRow key={o.id} label={`${o.name} (${o.category})`} currentCode={o.costCode} onSave={code => saveOverheadCode(o.id, code)} />
+            ))
+        }
+      </div>
+
+      {/* Labor Code Modal */}
+      {showLaborModal && (
+        <Modal title={editingCode ? 'Edit Labor Code' : 'Add Labor Code'} onClose={() => setShowLaborModal(false)}>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Code</label>
+                <input className="input font-mono" value={laborForm.code} onChange={e => setLaborForm({ ...laborForm, code: e.target.value })} placeholder="01-001" />
+              </div>
+              <div>
+                <label className="label">Name</label>
+                <input className="input" value={laborForm.name} onChange={e => setLaborForm({ ...laborForm, name: e.target.value })} placeholder="e.g. Lawn Maintenance Labor" />
+              </div>
+              <div className="col-span-2">
+                <label className="label">Notes (optional)</label>
+                <input className="input" value={laborForm.notes} onChange={e => setLaborForm({ ...laborForm, notes: e.target.value })} placeholder="e.g. All recurring mow/trim/blow labor" />
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button className="btn-primary flex-1" onClick={saveLaborCode}>Save</button>
+              <button className="btn-secondary" onClick={() => setShowLaborModal(false)}>Cancel</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ─── MAIN RESOURCES PAGE ──────────────────────────────────────────────────────
 const TABS: { key: Tab; label: string }[] = [
   { key: 'overview',       label: 'Overview'         },
@@ -1528,6 +1758,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'overhead',       label: '5-Other/Overhead' },
   { key: 'efficiencies',   label: 'Efficiencies'     },
   { key: 'contracts',      label: 'Contracts'        },
+  { key: 'accounting',     label: 'Accounting Codes' },
 ];
 
 export default function Resources({ data, setData }: Props) {
@@ -1555,6 +1786,7 @@ export default function Resources({ data, setData }: Props) {
       {tab === 'overhead'       && <OtherOverheadTab  data={data} setData={setData} />}
       {tab === 'efficiencies'   && <EfficienciesTab   data={data} setData={setData} />}
       {tab === 'contracts'      && <ContractsTab      data={data} setData={setData} />}
+      {tab === 'accounting'     && <AccountingCodesTab data={data} setData={setData} />}
     </div>
   );
 }

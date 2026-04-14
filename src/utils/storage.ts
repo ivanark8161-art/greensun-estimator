@@ -12,7 +12,7 @@ const ARRAY_COLLECTIONS = [
   'clients','contracts','jobs','invoices','snowTrips','timeEntries','expenses',
   'employees','equipment','overhead','fieldSupplies','subcontractors','crews',
   'projects','requests','leads','futureBudget','contractTemplates',
-  'salesTaxRates','serviceCatalog','accountingCodes',
+  'salesTaxRates','serviceCatalog','accountingCodes','timeSheets',
 ] as const;
 
 const COUNTER_KEYS = [
@@ -153,7 +153,6 @@ function applyMigrations(parsed: AppData): AppData {
     snowTrips:          (parsed.snowTrips ?? []).filter(t => !!(t as { jobId?: string }).jobId),
     invoices:           parsed.invoices           ?? [],
     timeEntries:        parsed.timeEntries        ?? [],
-    expenses:           parsed.expenses           ?? [],
     futureBudget:       parsed.futureBudget       ?? [],
     contractTemplates:  parsed.contractTemplates  ?? DEFAULT_DATA.contractTemplates,
     accountingCodes:    parsed.accountingCodes    ?? [],
@@ -162,8 +161,10 @@ function applyMigrations(parsed: AppData): AppData {
     requestCounter:     parsed.requestCounter     ?? 0,
     jobCounter:         parsed.jobCounter         ?? 1,
     snowTripCounter:    parsed.snowTripCounter    ?? 1,
-    jobs:               parsed.jobs               ?? [],
+    jobs:               (parsed.jobs ?? []).map(j => ({ ...j, visitLogs: j.visitLogs ?? [] })),
+    expenses:           (parsed.expenses ?? []).map(e => ({ ...e, status: e.status ?? 'approved' })) as AppData['expenses'],
     requests:           parsed.requests           ?? [],
+    timeSheets:         parsed.timeSheets         ?? [],
     salesTaxRates:      parsed.salesTaxRates      ?? [],
     subcontractors:     parsed.subcontractors     ?? [],
     savedAt:            parsed.savedAt            ?? undefined,

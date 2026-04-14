@@ -131,6 +131,7 @@ export const DEFAULT_DATA: AppData = {
   accountingCodes: [],
   projects: [],
   timeEntries: [],
+  timeSheets: [],
   expenses: [],
 
   equipment: [

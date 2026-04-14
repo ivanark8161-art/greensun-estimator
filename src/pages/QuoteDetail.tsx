@@ -576,6 +576,7 @@ export default function QuoteDetail({ data, setData }: Props) {
       hoursPerVisit:    maintHrsPerVisit,
       visitsPerMonth:   visitsPerMonth,
       projections:      [],
+      visitLogs:        [],
       notes:            '',
       createdAt:        new Date().toISOString(),
     };

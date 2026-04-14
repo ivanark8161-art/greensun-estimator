@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type {
-  AppData, Job, CostCodeCategory, Invoice,
+  AppData, Job, CostCodeCategory, Invoice, VisitLog, VisitPhoto,
 } from '../types';
 import { COST_CODE_LABELS } from '../types';
 import { saveData } from '../utils/storage';
@@ -66,19 +66,226 @@ function generateVisits(job: Job, contract: { scheduledDay?: number; visitsPerMo
   return visits;
 }
 
+// ─── Log Visit Modal ──────────────────────────────────────────────────────────
+function LogVisitModal({
+  visitDate, job, data, existingLog, onSave, onClose,
+}: {
+  visitDate: string;
+  job: Job;
+  data: AppData;
+  existingLog: VisitLog | null;
+  onSave: (log: VisitLog) => void;
+  onClose: () => void;
+}) {
+  const defaultCrew   = job.crewId ? data.crews.find(c => c.id === job.crewId) : null;
+  const defaultMemIds = defaultCrew?.memberIds ?? [];
+
+  const [crewId,      setCrewId]      = useState(existingLog?.crewId      ?? job.crewId ?? '');
+  const [empIds,      setEmpIds]      = useState<string[]>(existingLog?.employeeIds ?? defaultMemIds);
+  const [startTime,   setStartTime]   = useState(existingLog?.startTime   ?? '');
+  const [endTime,     setEndTime]     = useState(existingLog?.endTime     ?? '');
+  const [notes,       setNotes]       = useState(existingLog?.notes       ?? '');
+  const [photos,      setPhotos]      = useState<VisitPhoto[]>(existingLog?.photos ?? []);
+  const [uploading,   setUploading]   = useState(false);
+
+  const selectedCrew = crewId ? data.crews.find(c => c.id === crewId) : null;
+  const availableEmps = selectedCrew
+    ? data.employees.filter(e => selectedCrew.memberIds.includes(e.id))
+    : data.employees;
+
+  function toggleEmp(id: string) {
+    setEmpIds(prev => prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]);
+  }
+
+  function handleCrewChange(id: string) {
+    setCrewId(id);
+    const crew = data.crews.find(c => c.id === id);
+    if (crew) setEmpIds(crew.memberIds);
+    else setEmpIds([]);
+  }
+
+  function handlePhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    setUploading(true);
+    const readers = files.map(file => new Promise<VisitPhoto>(resolve => {
+      const reader = new FileReader();
+      reader.onload = ev => resolve({
+        id: `ph_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        name: file.name,
+        dataUrl: ev.target?.result as string,
+        caption: '',
+        uploadedAt: new Date().toISOString(),
+      });
+      reader.readAsDataURL(file);
+    }));
+    Promise.all(readers).then(newPhotos => {
+      setPhotos(prev => [...prev, ...newPhotos]);
+      setUploading(false);
+    });
+    e.target.value = '';
+  }
+
+  function removePhoto(id: string) { setPhotos(p => p.filter(ph => ph.id !== id)); }
+
+  function save() {
+    const log: VisitLog = {
+      id:          existingLog?.id ?? `vl_${Date.now()}`,
+      visitDate,
+      crewId:      crewId || undefined,
+      crewName:    selectedCrew?.name,
+      employeeIds: empIds,
+      startTime:   startTime || undefined,
+      endTime:     endTime || undefined,
+      photos,
+      notes,
+      status:      existingLog?.status ?? 'logged',
+      completedAt: existingLog?.completedAt ?? new Date().toISOString(),
+    };
+    onSave(log);
+  }
+
+  const hoursWorked = (() => {
+    if (!startTime || !endTime) return null;
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    const mins = (eh * 60 + em) - (sh * 60 + sm);
+    return mins > 0 ? (mins / 60).toFixed(2) : null;
+  })();
+
+  return (
+    <Modal title={`Log Visit — ${fmtDate(visitDate)}`} onClose={onClose} size="lg">
+      <div className="space-y-4">
+        {/* Crew */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Crew</label>
+            <select className="input" value={crewId} onChange={e => handleCrewChange(e.target.value)}>
+              <option value="">No crew assigned</option>
+              {data.crews.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Date</label>
+            <input className="input" type="date" value={visitDate} readOnly />
+          </div>
+        </div>
+
+        {/* Employees */}
+        <div>
+          <label className="label">Employees Who Completed This Visit</label>
+          <div className="flex flex-wrap gap-2 mt-1">
+            {availableEmps.map(emp => (
+              <button
+                key={emp.id}
+                type="button"
+                onClick={() => toggleEmp(emp.id)}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  empIds.includes(emp.id)
+                    ? 'bg-[#27AE60] text-white border-[#27AE60]'
+                    : 'bg-white text-gray-600 border-gray-300 hover:border-green-400'
+                }`}
+              >
+                {emp.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Times */}
+        <div className="grid grid-cols-3 gap-3 items-end">
+          <div>
+            <label className="label">Start Time</label>
+            <input className="input" type="time" value={startTime} onChange={e => setStartTime(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">End Time</label>
+            <input className="input" type="time" value={endTime} onChange={e => setEndTime(e.target.value)} />
+          </div>
+          <div className="pb-1">
+            {hoursWorked && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-2 text-sm text-center">
+                <span className="font-bold text-green-700">{hoursWorked} hrs</span>
+                <span className="text-green-600 text-xs ml-1">worked</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Notes */}
+        <div>
+          <label className="label">Notes</label>
+          <textarea className="input" rows={3} value={notes} onChange={e => setNotes(e.target.value)} placeholder="What was done, any issues..." />
+        </div>
+
+        {/* Photos */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="label mb-0">Photos</label>
+            <label className="btn-secondary text-xs px-3 py-1 cursor-pointer">
+              {uploading ? 'Uploading…' : '+ Add Photos'}
+              <input type="file" accept="image/*" multiple className="hidden" onChange={handlePhotoUpload} />
+            </label>
+          </div>
+          {photos.length > 0 && (
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+              {photos.map(ph => (
+                <div key={ph.id} className="relative group rounded-lg overflow-hidden border border-gray-200 aspect-square">
+                  <img src={ph.dataUrl} alt={ph.name} className="w-full h-full object-cover" />
+                  <button
+                    onClick={() => removePhoto(ph.id)}
+                    className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 text-xs hidden group-hover:flex items-center justify-center"
+                  >✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {photos.length === 0 && (
+            <div className="border border-dashed border-gray-300 rounded-xl p-6 text-center text-sm text-gray-400">
+              No photos yet. Click "+ Add Photos" to upload.
+            </div>
+          )}
+        </div>
+
+        <div className="flex gap-3 pt-2 border-t">
+          <button className="btn-primary flex-1" onClick={save}>✓ Mark Complete &amp; Save</button>
+          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Schedule Tab ─────────────────────────────────────────────────────────────
-function ScheduleTab({ job, data, onNavigateSchedule }: { job: Job; data: AppData; onNavigateSchedule: () => void }) {
+function ScheduleTab({
+  job, data, updateJob, onNavigateSchedule,
+}: {
+  job: Job;
+  data: AppData;
+  updateJob: (j: Job) => void;
+  onNavigateSchedule: () => void;
+}) {
   const contract = data.contracts.find(c => c.id === job.contractId) ?? null;
   const crew     = job.crewId ? data.crews.find(c => c.id === job.crewId) : null;
   const members  = crew ? data.employees.filter(e => crew.memberIds.includes(e.id)) : [];
   const visits   = useMemo(() => generateVisits(job, contract), [job, contract]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [logTarget, setLogTarget] = useState<string | null>(null); // visitDate being logged
+  const logTargetExisting = logTarget ? (job.visitLogs ?? []).find(l => l.visitDate === logTarget) ?? null : null;
+
   const today = new Date(); today.setHours(0,0,0,0);
-  const past   = visits.filter(v => v.isPast);
-  const future = visits.filter(v => !v.isPast);
+  const past    = visits.filter(v => v.isPast);
+  const future  = visits.filter(v => !v.isPast);
   const nextVisit = future[0];
+  const logsById  = new Map((job.visitLogs ?? []).map(l => [l.visitDate, l]));
 
   const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+  function saveLog(log: VisitLog) {
+    const existing = (job.visitLogs ?? []).filter(l => l.visitDate !== log.visitDate);
+    updateJob({ ...job, visitLogs: [...existing, log] });
+    setLogTarget(null);
+  }
 
   return (
     <div className="space-y-5">
@@ -90,9 +297,9 @@ function ScheduleTab({ job, data, onNavigateSchedule }: { job: Job; data: AppDat
           {contract?.scheduledTime && <p className="text-xs text-gray-400 mt-0.5">{contract.scheduledTime}</p>}
         </div>
         <div className="card p-4 text-center">
-          <p className="text-xs text-gray-400 mb-1">Visits Completed</p>
-          <p className="text-lg font-bold text-[#27AE60]">{past.length}</p>
-          <p className="text-xs text-gray-400">{visits.length} total scheduled</p>
+          <p className="text-xs text-gray-400 mb-1">Visits Logged</p>
+          <p className="text-lg font-bold text-[#27AE60]">{(job.visitLogs ?? []).length}</p>
+          <p className="text-xs text-gray-400">{past.length} past scheduled</p>
         </div>
         <div className="card p-4 text-center">
           <p className="text-xs text-gray-400 mb-1">Next Visit</p>
@@ -151,20 +358,51 @@ function ScheduleTab({ job, data, onNavigateSchedule }: { job: Job; data: AppDat
           <p className="text-sm text-gray-400 italic">No past visits yet.</p>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-            {[...past].reverse().slice(0, 24).map(v => (
-              <div key={v.dateStr} className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-sm">
-                <p className="font-medium text-gray-600">{fmtDateShort(v.date)}</p>
-                <p className="text-xs text-gray-400 mt-0.5">Completed</p>
-              </div>
-            ))}
-            {past.length > 24 && (
+            {[...past].reverse().slice(0, 48).map(v => {
+              const log = logsById.get(v.dateStr);
+              return (
+                <div key={v.dateStr} className={`rounded-xl border px-3 py-2 text-sm ${log ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                  <p className={`font-medium ${log ? 'text-green-800' : 'text-gray-600'}`}>{fmtDateShort(v.date)}</p>
+                  {log ? (
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="text-xs text-green-600 font-semibold">✓ Logged</span>
+                      <button className="text-xs text-gray-400 hover:text-gray-600 underline" onClick={() => setLogTarget(v.dateStr)}>Edit</button>
+                    </div>
+                  ) : (
+                    <button
+                      className="mt-1 text-xs text-[#27AE60] font-semibold hover:underline"
+                      onClick={() => setLogTarget(v.dateStr)}
+                    >
+                      + Log Visit
+                    </button>
+                  )}
+                  {log?.startTime && log?.endTime && (
+                    <p className="text-xs text-gray-400 mt-0.5">{log.startTime}–{log.endTime}</p>
+                  )}
+                  {log?.photos?.length ? <p className="text-xs text-gray-400">{log.photos.length} photo{log.photos.length > 1 ? 's' : ''}</p> : null}
+                </div>
+              );
+            })}
+            {past.length > 48 && (
               <div className="rounded-xl border border-dashed border-gray-200 px-3 py-2 text-sm text-gray-400 text-center flex items-center justify-center">
-                +{past.length - 24} more
+                +{past.length - 48} more
               </div>
             )}
           </div>
         )}
       </div>
+
+      {/* Log Visit Modal */}
+      {logTarget && (
+        <LogVisitModal
+          visitDate={logTarget}
+          job={job}
+          data={data}
+          existingLog={logTargetExisting}
+          onSave={saveLog}
+          onClose={() => setLogTarget(null)}
+        />
+      )}
     </div>
   );
 }
@@ -709,6 +947,7 @@ export default function JobDetail({ data, setData }: Props) {
         <ScheduleTab
           job={job}
           data={data}
+          updateJob={updateJob}
           onNavigateSchedule={() => navigate('/schedule')}
         />
       )}

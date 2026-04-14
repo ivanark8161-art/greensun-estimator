@@ -348,9 +348,42 @@ export interface TimeEntry {
   jobType: 'contract' | 'project' | 'general';
   jobId?: string;
   jobName: string;
+  costCodeId?: string;   // AccountingCode.id
   hours: number;
   notes: string;
   createdAt: string;
+  timesheetId?: string;  // which timesheet submission this came from
+  source?: 'manual' | 'timesheet' | 'visit_log';
+}
+
+export interface TimeSheetRow {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  jobId?: string;
+  jobName: string;
+  costCodeId?: string;   // AccountingCode.id
+  mon: number;
+  tue: number;
+  wed: number;
+  thu: number;
+  fri: number;
+  sat: number;
+  sun: number;
+}
+
+export type TimeSheetStatus = 'pending' | 'approved' | 'rejected';
+
+export interface TimeSheet {
+  id: string;
+  weekStart: string;     // YYYY-MM-DD (Monday of the week)
+  submittedBy: string;   // name/label of submitter
+  submittedAt: string;   // ISO timestamp
+  status: TimeSheetStatus;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectionNotes?: string;
+  rows: TimeSheetRow[];
 }
 
 // ─── Subcontractors ───────────────────────────────────────────────────────────
@@ -370,16 +403,27 @@ export interface Subcontractor {
 // ─── Expenses ─────────────────────────────────────────────────────────────────
 export type ExpenseCategory = 'fuel' | 'material' | 'equipment' | 'subcontractor' | 'other';
 
+export type ExpenseStatus = 'pending' | 'approved' | 'rejected';
+
 export interface ExpenseEntry {
   id: string;
   date: string;
+  employeeId?: string;
+  employeeName?: string;
   jobType: 'contract' | 'project' | 'overhead';
   jobId?: string;
   jobName: string;
+  costCodeId?: string;   // AccountingCode.id
   category: ExpenseCategory;
   description: string;
   amount: number;
+  receiptDataUrl?: string;  // base64 image/pdf
+  receiptName?: string;
   notes: string;
+  status: ExpenseStatus;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectionNotes?: string;
   createdAt: string;
 }
 
@@ -517,6 +561,29 @@ export interface JobProjectionSnapshot {
   notes:           string;
 }
 
+// ─── Visit Logs ───────────────────────────────────────────────────────────────
+export interface VisitPhoto {
+  id: string;
+  name: string;
+  dataUrl: string;    // base64
+  caption: string;
+  uploadedAt: string;
+}
+
+export interface VisitLog {
+  id: string;
+  visitDate: string;        // YYYY-MM-DD — the scheduled visit date this log covers
+  crewId?: string;
+  crewName?: string;
+  employeeIds: string[];    // crew members who completed this visit
+  startTime?: string;       // HH:MM
+  endTime?: string;         // HH:MM
+  photos: VisitPhoto[];
+  notes: string;
+  status: 'logged' | 'pushed';  // pushed = time entries have been created
+  completedAt: string;          // ISO timestamp
+}
+
 export type JobStatus = 'active' | 'on_hold' | 'completed' | 'cancelled';
 
 export interface Job {
@@ -536,6 +603,7 @@ export interface Job {
   hoursPerVisit:   number;
   visitsPerMonth:  number;
   projections:     JobProjectionSnapshot[];
+  visitLogs:       VisitLog[];
   lastProjectionPrompt?: string;  // ISO date of last "post projection" prompt
   notes:           string;
   createdAt:       string;
@@ -625,6 +693,7 @@ export interface AppData {
   requests: ServiceRequest[];
   salesTaxRates: SalesTaxRate[];
   jobs: Job[];
+  timeSheets: TimeSheet[];
   savedAt?: string;   // ISO timestamp — set on every saveData() call, used to pick the newer copy
 }
 

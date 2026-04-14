@@ -26,6 +26,7 @@ import Resources     from './pages/Resources';
 import GrowthBudget  from './pages/GrowthBudget';
 import Reports       from './pages/Reports';
 import Jobs          from './pages/Jobs';
+import JobDetail     from './pages/JobDetail';
 
 // ── Sync status shown in a small corner indicator ─────────────────────────────
 type SyncStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -215,6 +216,7 @@ export default function App() {
           <Route path="projects"          element={<Navigate to="/jobs" replace />} />
           <Route path="projects/:id"      element={<Navigate to="/jobs" replace />} />
           <Route path="jobs"              element={<Jobs         data={data} setData={setData} />} />
+          <Route path="jobs/:id"          element={<JobDetail    data={data} setData={setData} />} />
           <Route path="contracts"         element={<Navigate to="/jobs" replace />} />
           <Route path="snow"              element={<SnowRemoval  data={data} setData={setData} />} />
           <Route path="invoices"          element={<Invoices     data={data} setData={setData} />} />

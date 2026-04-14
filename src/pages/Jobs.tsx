@@ -526,7 +526,7 @@ function LandscapingTab({ data, setData, openProjectId }: Props & { openProjectI
 // ─── Maintenance Jobs Tab ─────────────────────────────────────────────────────
 function MaintenanceTab({ data, setData }: Props) {
   const navigate = useNavigate();
-  const [selectedId, setSelectedId] = useState<string | null>(
+  const [selectedId] = useState<string | null>(
     data.jobs.length > 0 ? data.jobs[0].id : null
   );
   const [detailTab, setDetailTab] = useState<'costcodes' | 'projections' | 'details'>('costcodes');
@@ -605,16 +605,12 @@ function MaintenanceTab({ data, setData }: Props) {
           return (
             <button
               key={j.id}
-              onClick={() => { setSelectedId(j.id); setDetailTab('costcodes'); setEditingCodes(false); }}
-              className={`text-left p-3 rounded-xl border transition-colors ${
-                selectedId === j.id
-                  ? 'bg-[#27AE60] text-white border-[#27AE60]'
-                  : 'bg-white border-gray-200 hover:border-green-300'
-              }`}
+              onClick={() => navigate('/jobs/' + j.id)}
+              className="text-left p-3 rounded-xl border transition-colors bg-white border-gray-200 hover:border-green-300 hover:shadow-sm"
             >
               <p className="font-semibold text-sm">{j.jobNumber}</p>
-              <p className={`text-xs mt-0.5 ${selectedId === j.id ? 'text-green-100' : 'text-gray-500'}`}>{j.clientName}</p>
-              <p className={`text-xs ${selectedId === j.id ? 'text-green-100' : 'text-gray-400'}`}>{j.title}</p>
+              <p className="text-xs mt-0.5 text-gray-500">{j.clientName}</p>
+              <p className="text-xs text-gray-400">{j.title}</p>
               {c && (
                 <span className={`inline-block mt-1.5 text-[10px] px-2 py-0.5 rounded-full font-semibold ${
                   j.status === 'active' ? 'bg-green-100 text-green-700' :

@@ -526,9 +526,12 @@ function LandscapingTab({ data, setData, openProjectId }: Props & { openProjectI
 // ─── Maintenance Jobs Tab ─────────────────────────────────────────────────────
 function MaintenanceTab({ data, setData }: Props) {
   const navigate = useNavigate();
+  const activeJobs   = data.jobs.filter(j => j.status === 'active');
+  const inactiveJobs = data.jobs.filter(j => j.status !== 'active');
   const [selectedId] = useState<string | null>(
-    data.jobs.length > 0 ? data.jobs[0].id : null
+    activeJobs.length > 0 ? activeJobs[0].id : null
   );
+  const [showInactive, setShowInactive] = useState(false);
   const [detailTab, setDetailTab] = useState<'costcodes' | 'projections' | 'details'>('costcodes');
   const [editingCodes, setEditingCodes] = useState(false);
   const [codesDraft, setCodesDraft] = useState<JobCostCode[]>([]);
@@ -548,6 +551,13 @@ function MaintenanceTab({ data, setData }: Props) {
     saveData(newData);
     setShowSaved(true);
     setTimeout(() => setShowSaved(false), 2000);
+  }
+
+  function archiveJob(jobId: string, e: { stopPropagation(): void }) {
+    e.stopPropagation();
+    if (!confirm('Archive this job? It will be hidden from the active list.')) return;
+    const newData = { ...data, jobs: data.jobs.map(j => j.id === jobId ? { ...j, status: 'archived' as const } : j) };
+    setData(newData); saveData(newData);
   }
 
   function startEditCodes() {
@@ -597,33 +607,59 @@ function MaintenanceTab({ data, setData }: Props) {
       {/* ── Left: job list ── */}
       <div className="w-56 shrink-0 flex flex-col gap-2">
         <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Active Jobs</h2>
-        {data.jobs.length === 0 && (
-          <p className="text-xs text-gray-400 italic">No jobs yet. Convert a quote to a job from the Quotes page.</p>
+        {activeJobs.length === 0 && (
+          <p className="text-xs text-gray-400 italic">No active jobs. Convert a quote to a job from the Quotes page.</p>
         )}
-        {data.jobs.map(j => {
-          const c = data.contracts.find(ct => ct.id === j.contractId);
-          return (
+        {activeJobs.map(j => (
+          <div key={j.id} className="relative group">
             <button
-              key={j.id}
               onClick={() => navigate('/jobs/' + j.id)}
-              className="text-left p-3 rounded-xl border transition-colors bg-white border-gray-200 hover:border-green-300 hover:shadow-sm"
+              className="w-full text-left p-3 rounded-xl border transition-colors bg-white border-gray-200 hover:border-green-300 hover:shadow-sm"
             >
               <p className="font-semibold text-sm">{j.jobNumber}</p>
               <p className="text-xs mt-0.5 text-gray-500">{j.clientName}</p>
               <p className="text-xs text-gray-400">{j.title}</p>
-              {c && (
-                <span className={`inline-block mt-1.5 text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                  j.status === 'active' ? 'bg-green-100 text-green-700' :
+              <span className="inline-block mt-1.5 text-[10px] px-2 py-0.5 rounded-full font-semibold bg-green-100 text-green-700">active</span>
+            </button>
+            <button
+              onClick={e => archiveJob(j.id, e)}
+              className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 text-[10px] text-gray-400 hover:text-red-500 px-1.5 py-0.5 rounded transition-all"
+              title="Archive job"
+            >
+              Archive
+            </button>
+          </div>
+        ))}
+
+        {inactiveJobs.length > 0 && (
+          <div className="mt-1">
+            <button
+              onClick={() => setShowInactive(v => !v)}
+              className="text-[10px] text-gray-400 hover:text-gray-600 flex items-center gap-1 w-full py-1"
+            >
+              <span>{showInactive ? '▼' : '▶'}</span>
+              <span>Other ({inactiveJobs.length})</span>
+            </button>
+            {showInactive && inactiveJobs.map(j => (
+              <button
+                key={j.id}
+                onClick={() => navigate('/jobs/' + j.id)}
+                className="w-full text-left p-2.5 mt-1 rounded-xl border transition-colors bg-gray-50 border-gray-100 hover:border-gray-300 opacity-70"
+              >
+                <p className="font-semibold text-xs">{j.jobNumber}</p>
+                <p className="text-[10px] text-gray-500">{j.clientName}</p>
+                <span className={`inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${
                   j.status === 'completed' ? 'bg-blue-100 text-blue-700' :
-                  j.status === 'on_hold' ? 'bg-yellow-100 text-yellow-700' :
+                  j.status === 'on_hold'   ? 'bg-yellow-100 text-yellow-700' :
+                  j.status === 'archived'  ? 'bg-gray-100 text-gray-500' :
                   'bg-gray-100 text-gray-500'
                 }`}>
                   {j.status.replace('_', ' ')}
                 </span>
-              )}
-            </button>
-          );
-        })}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── Right: job detail ── */}
@@ -642,9 +678,10 @@ function MaintenanceTab({ data, setData }: Props) {
                 <div className="flex items-center gap-2 mb-1">
                   <h2 className="text-xl font-bold text-gray-900">{job.jobNumber} — {job.title}</h2>
                   <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                    job.status === 'active' ? 'bg-green-100 text-green-700' :
+                    job.status === 'active'    ? 'bg-green-100 text-green-700' :
                     job.status === 'completed' ? 'bg-blue-100 text-blue-700' :
-                    job.status === 'on_hold' ? 'bg-yellow-100 text-yellow-700' :
+                    job.status === 'on_hold'   ? 'bg-yellow-100 text-yellow-700' :
+                    job.status === 'archived'  ? 'bg-gray-200 text-gray-500' :
                     'bg-gray-100 text-gray-500'
                   }`}>{job.status.replace('_', ' ')}</span>
                 </div>
@@ -661,6 +698,7 @@ function MaintenanceTab({ data, setData }: Props) {
                   <option value="on_hold">On Hold</option>
                   <option value="completed">Completed</option>
                   <option value="cancelled">Cancelled</option>
+                  <option value="archived">Archived</option>
                 </select>
                 <button className="btn-secondary text-sm px-3 py-1" onClick={() => navigate('/schedule')}>
                   📅 Schedule

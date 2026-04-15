@@ -559,14 +559,28 @@ export default function QuoteDetail({ data, setData }: Props) {
     const driveTimeMin = milesFromShop > 0 ? Math.round((milesFromShop / (data.settings.averageSpeedMph || 30)) * 60) * 2 : 0;
 
     const jobCounter = (data.jobCounter ?? 1);
+    const resolvedJobType: 'maintenance' | 'landscaping' | 'snow' =
+      jobType === 'landscaping' ? 'landscaping'
+      : snowItems.length > 0 && maintItems.length === 0 ? 'snow'
+      : 'maintenance';
+    // Generate YY-TNNN job number (e.g. 26-1001 maintenance, 26-2001 landscaping)
+    const yy = String(new Date().getFullYear()).slice(-2);
+    const typeChar = resolvedJobType === 'landscaping' ? '2' : '1';
+    const numPrefix = `${yy}-${typeChar}`;
+    const maxSeq = (data.jobs ?? []).reduce((mx, j) => {
+      if (!j.jobNumber.startsWith(numPrefix)) return mx;
+      const n = parseInt(j.jobNumber.slice(numPrefix.length), 10);
+      return isNaN(n) ? mx : Math.max(mx, n);
+    }, 0);
+    const newJobNumber = `${numPrefix}${String(maxSeq + 1).padStart(3, '0')}`;
     const newJob: Job = {
       id:               `job_${Date.now()}`,
-      jobNumber:        `J-${String(jobCounter).padStart(3, '0')}`,
+      jobNumber:        newJobNumber,
       contractId:       contract.id,
       clientId:         contract.clientId,
       clientName:       contract.clientName,
       title:            contract.title || contract.clientName,
-      jobType:          jobType === 'landscaping' ? 'landscaping' : snowItems.length > 0 && maintItems.length === 0 ? 'snow' : 'maintenance',
+      jobType:          resolvedJobType,
       status:           'active',
       startDate:        contract.startDate || new Date().toISOString().split('T')[0],
       endDate:          contract.endDate || '',

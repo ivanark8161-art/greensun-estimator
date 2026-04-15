@@ -1,4 +1,4 @@
-import type { Invoice } from '../types';
+import type { Invoice, TimeSheet, ExpenseEntry, Employee, Job } from '../types';
 import { getAuthHeaders } from './auth';
 
 const QBO_SERVER = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:3001';
@@ -49,4 +49,36 @@ export async function disconnectQBO(): Promise<void> {
     const err = await resp.json().catch(() => ({ error: resp.statusText }));
     throw new Error(err.error || `Disconnect failed: ${resp.status}`);
   }
+}
+
+export async function pushTimesheetToQBO(
+  timesheet: TimeSheet,
+  employees: Employee[],
+  jobs: Job[],
+): Promise<{ timeActivityIds: string[] }> {
+  const resp = await fetch(`${QBO_SERVER}/api/qbo/push-timesheet`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body:    JSON.stringify({ timesheet, employees, jobs }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: resp.statusText }));
+    throw new Error(err.error || `Push failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+export async function pushExpenseToQBO(
+  expense: ExpenseEntry,
+): Promise<{ qboPurchaseId: string }> {
+  const resp = await fetch(`${QBO_SERVER}/api/qbo/push-expense`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body:    JSON.stringify({ expense }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: resp.statusText }));
+    throw new Error(err.error || `Push failed: ${resp.status}`);
+  }
+  return resp.json();
 }

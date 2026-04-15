@@ -384,6 +384,7 @@ export interface TimeSheet {
   approvedAt?: string;
   rejectionNotes?: string;
   rows: TimeSheetRow[];
+  qboSyncedAt?: string;  // ISO timestamp — set after successful QBO push
 }
 
 // ─── Subcontractors ───────────────────────────────────────────────────────────
@@ -425,6 +426,7 @@ export interface ExpenseEntry {
   approvedAt?: string;
   rejectionNotes?: string;
   createdAt: string;
+  qboSyncedAt?: string;  // ISO timestamp — set after successful QBO push
 }
 
 // ─── Crews ───────────────────────────────────────────────────────────────────
@@ -584,7 +586,7 @@ export interface VisitLog {
   completedAt: string;          // ISO timestamp
 }
 
-export type JobStatus = 'active' | 'on_hold' | 'completed' | 'cancelled';
+export type JobStatus = 'active' | 'on_hold' | 'completed' | 'cancelled' | 'archived';
 
 export interface Job {
   id:              string;

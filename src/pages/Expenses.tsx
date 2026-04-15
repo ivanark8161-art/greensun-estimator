@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AppData, ExpenseEntry, ExpenseCategory } from '../types';
 import { saveData } from '../utils/storage';
 import { formatCurrency } from '../utils/calculations';
+import { pushExpenseToQBO } from '../utils/qboApi';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 
@@ -50,7 +51,7 @@ function LogExpenseTab({ data, setData }: Props) {
   const [form, setForm] = useState(blankForm);
 
   const jobOptions = [
-    ...data.jobs.map(j => ({ id: j.id, name: `${j.jobNumber} · ${j.clientName}`, type: 'contract' as const })),
+    ...data.jobs.filter(j => j.status !== 'archived').map(j => ({ id: j.id, name: `${j.jobNumber} · ${j.clientName}`, type: 'contract' as const })),
     ...data.contracts.filter(c => !data.jobs.find(j => j.contractId === c.id))
       .map(c => ({ id: c.id, name: c.clientName, type: 'contract' as const })),
     { id: '', name: 'Overhead / General', type: 'overhead' as const },
@@ -161,7 +162,7 @@ function LogExpenseTab({ data, setData }: Props) {
         </select>
         <select className="input max-w-xs" value={filterJob} onChange={e => setFilterJob(e.target.value)}>
           <option value="all">All Jobs</option>
-          {data.jobs.map(j => <option key={j.id} value={j.id}>{j.jobNumber} · {j.clientName}</option>)}
+          {data.jobs.filter(j => j.status !== 'archived').map(j => <option key={j.id} value={j.id}>{j.jobNumber} · {j.clientName}</option>)}
         </select>
         <button className="btn-primary ml-auto" onClick={() => open()}>+ Log Expense</button>
       </div>
@@ -301,6 +302,24 @@ function ExpenseApprovalsTab({ data, setData }: Props) {
   const [viewExp, setViewExp] = useState<ExpenseEntry | null>(null);
   const [rejectNotes, setRejectNotes] = useState('');
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  const [pushingId, setPushingId] = useState<string | null>(null);
+  const [pushError, setPushError] = useState<string | null>(null);
+
+  async function pushToQBO(exp: ExpenseEntry) {
+    setPushingId(exp.id);
+    setPushError(null);
+    try {
+      await pushExpenseToQBO(exp);
+      const updated: ExpenseEntry = { ...exp, qboSyncedAt: new Date().toISOString() };
+      const newData = { ...data, expenses: data.expenses.map(e => e.id === exp.id ? updated : e) };
+      setData(newData); saveData(newData);
+      if (viewExp?.id === exp.id) setViewExp(updated);
+    } catch (err) {
+      setPushError(err instanceof Error ? err.message : 'Push failed');
+    } finally {
+      setPushingId(null);
+    }
+  }
 
   const pending  = data.expenses.filter(e => e.status === 'pending')
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -393,11 +412,16 @@ function ExpenseApprovalsTab({ data, setData }: Props) {
       {reviewed.length > 0 && (
         <div>
           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Review History</h3>
+          {pushError && (
+            <div className="mb-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+              QBO push failed: {pushError}
+            </div>
+          )}
           <div className="card p-0 overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
-                  {['Date','Employee','Description','Amount','Status','Reviewed'].map(h => (
+                  {['Date','Employee','Description','Amount','Status','QBO','Reviewed'].map(h => (
                     <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">{h}</th>
                   ))}
                 </tr>
@@ -414,6 +438,19 @@ function ExpenseApprovalsTab({ data, setData }: Props) {
                         {exp.status}
                       </span>
                       {exp.rejectionNotes && <span className="text-xs text-red-500 ml-2 italic">{exp.rejectionNotes}</span>}
+                    </td>
+                    <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
+                      {exp.status === 'approved' && (
+                        exp.qboSyncedAt
+                          ? <span className="text-xs text-green-600 font-semibold">✓ Synced</span>
+                          : <button
+                              className="text-xs px-2 py-0.5 rounded border border-[#27AE60] text-[#27AE60] hover:bg-green-50 disabled:opacity-40"
+                              disabled={pushingId === exp.id}
+                              onClick={() => pushToQBO(exp)}
+                            >
+                              {pushingId === exp.id ? '…' : '↑ QBO'}
+                            </button>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-gray-400">
                       {exp.approvedAt ? fmtDate(exp.approvedAt.split('T')[0]) : '—'}
@@ -470,10 +507,21 @@ function ExpenseApprovalsTab({ data, setData }: Props) {
                 )}
               </div>
             ) : (
-              <div className="flex gap-3 pt-2 border-t">
+              <div className="flex gap-3 pt-2 border-t flex-wrap items-center">
                 <span className={`text-sm px-3 py-2 rounded-xl font-semibold ${viewExp.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                   {viewExp.status === 'approved' ? '✓ Approved' : '✕ Rejected'}
                 </span>
+                {viewExp.status === 'approved' && (
+                  viewExp.qboSyncedAt
+                    ? <span className="text-xs text-green-600 font-semibold">✓ Synced to QBO {new Date(viewExp.qboSyncedAt).toLocaleDateString()}</span>
+                    : <button
+                        className="btn-secondary text-sm"
+                        disabled={pushingId === viewExp.id}
+                        onClick={() => pushToQBO(viewExp)}
+                      >
+                        {pushingId === viewExp.id ? 'Pushing…' : '↑ Push to QBO'}
+                      </button>
+                )}
                 <button className="btn-secondary ml-auto" onClick={() => setViewExp(null)}>Close</button>
               </div>
             )}

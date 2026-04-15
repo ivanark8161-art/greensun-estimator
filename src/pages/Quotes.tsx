@@ -55,6 +55,13 @@ export default function Quotes({ data, setData }: Props) {
     saveData(updated);
   }
 
+  function deleteQuote(id: string) {
+    if (!confirm('Delete this quote? This cannot be undone.')) return;
+    const updated = { ...data, contracts: data.contracts.filter(c => c.id !== id) };
+    setData(updated);
+    saveData(updated);
+  }
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -172,15 +179,24 @@ export default function Quotes({ data, setData }: Props) {
                       {formatCurrency(annualTotal)}
                     </td>
                     <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                      {q.status === 'approved' && (
+                      <div className="flex items-center gap-3 justify-end">
+                        {q.status === 'approved' && (
+                          <button
+                            onClick={() => markActive(q.id)}
+                            className="text-xs text-[#27AE60] hover:underline font-semibold"
+                            title="Activate job"
+                          >
+                            Activate
+                          </button>
+                        )}
                         <button
-                          onClick={() => markActive(q.id)}
-                          className="text-xs text-[#27AE60] hover:underline font-semibold"
-                          title="Activate job"
+                          onClick={() => deleteQuote(q.id)}
+                          className="text-xs text-red-400 hover:text-red-600 hover:underline"
+                          title="Delete quote"
                         >
-                          Activate
+                          Delete
                         </button>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 );

@@ -124,7 +124,7 @@ const ARRAY_COLLECTIONS = [
   'clients','contracts','jobs','invoices','snowTrips','timeEntries','expenses',
   'employees','equipment','overhead','fieldSupplies','subcontractors','crews',
   'projects','requests','leads','futureBudget','contractTemplates',
-  'salesTaxRates','serviceCatalog',
+  'salesTaxRates','serviceCatalog','timeSheets','accountingCodes',
 ];
 const COUNTER_KEYS = ['estimateCounter','invoiceCounter','projectCounter','requestCounter','jobCounter','snowTripCounter'];
 
@@ -503,6 +503,192 @@ app.post('/api/qbo/disconnect', authMiddleware, (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Helper: add N days to a YYYY-MM-DD string
+function addDaysStr(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split('T')[0];
+}
+
+// POST /api/qbo/push-timesheet — push an approved timesheet as QBO Time Activities
+app.post('/api/qbo/push-timesheet', authMiddleware, async (req, res) => {
+  try {
+    const { timesheet, employees, jobs } = req.body;
+    if (!timesheet) return res.status(400).json({ error: 'timesheet is required' });
+
+    const tokens  = await getValidTokens();
+    const headers = qboHeaders(tokens.access_token);
+    const realmId = tokens.realmId;
+
+    const empIdCache      = {}; // our employeeId → QBO Employee Id
+    const customerIdCache = {}; // our jobId → QBO Customer Id
+    const timeActivityIds = [];
+    const DOW_KEYS = ['mon','tue','wed','thu','fri','sat','sun'];
+
+    for (const row of timesheet.rows) {
+      // ── Find or create QBO Employee ──────────────────────────────────────────
+      if (!empIdCache[row.employeeId]) {
+        const displayName = row.employeeName;
+        const empData     = (employees || []).find(e => e.id === row.employeeId);
+        const nameParts   = displayName.trim().split(' ');
+        const firstName   = nameParts[0] || displayName;
+        const lastName    = nameParts.slice(1).join(' ') || '';
+
+        const qResp = await axios.get(
+          `${QBO_BASE}/v3/company/${realmId}/query?query=SELECT * FROM Employee WHERE DisplayName = '${displayName.replace(/'/g, "\\'")}'&minorversion=65`,
+          { headers }
+        );
+        const existing = qResp.data?.QueryResponse?.Employee || [];
+        if (existing.length > 0) {
+          empIdCache[row.employeeId] = existing[0].Id;
+        } else {
+          const cResp = await axios.post(
+            `${QBO_BASE}/v3/company/${realmId}/employee?minorversion=65`,
+            { GivenName: firstName, FamilyName: lastName, DisplayName: displayName },
+            { headers }
+          );
+          empIdCache[row.employeeId] = cResp.data?.Employee?.Id;
+        }
+        // Store hourly rate for later
+        empIdCache[row.employeeId + '_rate'] = empData?.hourlyRate || 0;
+      }
+
+      // ── Find or create QBO Customer for the job ──────────────────────────────
+      if (row.jobId && !customerIdCache[row.jobId]) {
+        const jobData      = (jobs || []).find(j => j.id === row.jobId);
+        const customerName = jobData?.clientName || row.jobName;
+        if (customerName) {
+          const qResp = await axios.get(
+            `${QBO_BASE}/v3/company/${realmId}/query?query=SELECT * FROM Customer WHERE DisplayName = '${customerName.replace(/'/g, "\\'")}'&minorversion=65`,
+            { headers }
+          );
+          const existing = qResp.data?.QueryResponse?.Customer || [];
+          if (existing.length > 0) {
+            customerIdCache[row.jobId] = existing[0].Id;
+          } else {
+            const cResp = await axios.post(
+              `${QBO_BASE}/v3/company/${realmId}/customer?minorversion=65`,
+              { DisplayName: customerName },
+              { headers }
+            );
+            customerIdCache[row.jobId] = cResp.data?.Customer?.Id;
+          }
+        }
+      }
+
+      // ── Create one TimeActivity per day with hours > 0 ───────────────────────
+      for (let i = 0; i < DOW_KEYS.length; i++) {
+        const hrs = row[DOW_KEYS[i]] || 0;
+        if (hrs <= 0) continue;
+
+        const txnDate    = addDaysStr(timesheet.weekStart, i);
+        const wholeHours = Math.floor(hrs);
+        const minutes    = Math.round((hrs - wholeHours) * 60);
+        const hourlyRate = empIdCache[row.employeeId + '_rate'] || 0;
+
+        const payload = {
+          NameOf:      'Employee',
+          EmployeeRef: { value: empIdCache[row.employeeId] },
+          TxnDate:     txnDate,
+          Hours:       wholeHours,
+          Minutes:     minutes,
+          Description: `${row.employeeName} — ${row.jobName}`,
+          ...(hourlyRate > 0 ? { HourlyRate: hourlyRate } : {}),
+          ...(row.jobId && customerIdCache[row.jobId]
+            ? { CustomerRef: { value: customerIdCache[row.jobId] } }
+            : {}),
+        };
+
+        const taResp = await axios.post(
+          `${QBO_BASE}/v3/company/${realmId}/timeactivity?minorversion=65`,
+          payload,
+          { headers }
+        );
+        const taId = taResp.data?.TimeActivity?.Id;
+        if (taId) timeActivityIds.push(taId);
+      }
+    }
+
+    res.json({ ok: true, timeActivityIds });
+  } catch (err) {
+    console.error('Push timesheet error:', err?.response?.data || err.message);
+    const detail = err?.response?.data ? JSON.stringify(err.response.data) : err.message;
+    res.status(500).json({ error: detail });
+  }
+});
+
+// POST /api/qbo/push-expense — push an approved expense as a QBO Purchase
+app.post('/api/qbo/push-expense', authMiddleware, async (req, res) => {
+  try {
+    const { expense } = req.body;
+    if (!expense) return res.status(400).json({ error: 'expense is required' });
+
+    const tokens  = await getValidTokens();
+    const headers = qboHeaders(tokens.access_token);
+    const realmId = tokens.realmId;
+
+    // 1. Get a bank account to use as payment source
+    const bankResp = await axios.get(
+      `${QBO_BASE}/v3/company/${realmId}/query?query=SELECT * FROM Account WHERE AccountType = 'Bank' MAXRESULTS 1&minorversion=65`,
+      { headers }
+    );
+    const bankAccounts = bankResp.data?.QueryResponse?.Account || [];
+    if (bankAccounts.length === 0) throw new Error('No bank account found in QBO — please create one first.');
+    const bankAccountId = bankAccounts[0].Id;
+
+    // 2. Find an expense account that matches the category
+    const categoryHints = {
+      fuel:          ['fuel', 'automobile', 'gas', 'vehicle'],
+      material:      ['material', 'supplies', 'job material'],
+      equipment:     ['equipment', 'tools', 'machinery'],
+      subcontractor: ['subcontract', 'outside service', 'contract labor'],
+      other:         ['other', 'miscellaneous', 'general'],
+    };
+    const hints = categoryHints[expense.category] || ['other'];
+
+    const expResp = await axios.get(
+      `${QBO_BASE}/v3/company/${realmId}/query?query=SELECT * FROM Account WHERE AccountType = 'Expense' OR AccountType = 'Cost of Goods Sold' MAXRESULTS 100&minorversion=65`,
+      { headers }
+    );
+    const expAccounts = expResp.data?.QueryResponse?.Account || [];
+    if (expAccounts.length === 0) throw new Error('No expense accounts found in QBO.');
+
+    const matched = expAccounts.find(a =>
+      hints.some(hint => a.Name.toLowerCase().includes(hint))
+    ) || expAccounts[0];
+
+    // 3. Create QBO Purchase
+    const payload = {
+      PaymentType: 'Cash',
+      AccountRef:  { value: bankAccountId },
+      TxnDate:     expense.date,
+      TotalAmt:    expense.amount,
+      Line: [{
+        Amount:     expense.amount,
+        DetailType: 'AccountBasedExpenseLineDetail',
+        Description: expense.description,
+        AccountBasedExpenseLineDetail: {
+          AccountRef: { value: matched.Id },
+        },
+      }],
+    };
+
+    const purchaseResp = await axios.post(
+      `${QBO_BASE}/v3/company/${realmId}/purchase?minorversion=65`,
+      payload,
+      { headers }
+    );
+    const purchase = purchaseResp.data?.Purchase;
+    if (!purchase) throw new Error('Failed to create QBO purchase');
+
+    res.json({ ok: true, qboPurchaseId: purchase.Id });
+  } catch (err) {
+    console.error('Push expense error:', err?.response?.data || err.message);
+    const detail = err?.response?.data ? JSON.stringify(err.response.data) : err.message;
+    res.status(500).json({ error: detail });
   }
 });
 

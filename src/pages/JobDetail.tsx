@@ -987,6 +987,7 @@ export default function JobDetail({ data, setData }: Props) {
     on_hold: 'bg-yellow-100 text-yellow-700',
     completed: 'bg-blue-100 text-blue-700',
     cancelled: 'bg-gray-100 text-gray-500',
+    archived: 'bg-gray-200 text-gray-500',
   };
 
   return (
@@ -1026,6 +1027,7 @@ export default function JobDetail({ data, setData }: Props) {
               <option value="on_hold">On Hold</option>
               <option value="completed">Completed</option>
               <option value="cancelled">Cancelled</option>
+              <option value="archived">Archived</option>
             </select>
             {contract && (
               <button className="btn-secondary text-sm px-3 py-1.5" onClick={() => navigate(`/quotes/${contract.id}`)}>

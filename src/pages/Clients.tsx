@@ -708,11 +708,18 @@ function CreateClientPage({ data, setData }: Props) {
 }
 
 // ─── Client List Page ─────────────────────────────────────────────────────────
-function ClientListPage({ data, setData: _setData }: Props) {
+function ClientListPage({ data, setData }: Props) {
   const navigate = useNavigate();
 
   function clientRevenue(clientId: string) {
     return data.contracts.filter(c => c.clientId === clientId && c.status === 'active').reduce((s, c) => s + c.monthlyRevenue, 0);
+  }
+
+  function deleteClient(id: string, e: { stopPropagation(): void }) {
+    e.stopPropagation();
+    if (!confirm('Delete this client? This cannot be undone.')) return;
+    const updated = { ...data, clients: data.clients.filter(c => c.id !== id) };
+    setData(updated); saveData(updated);
   }
 
   return (
@@ -773,6 +780,7 @@ function ClientListPage({ data, setData: _setData }: Props) {
                       <div className="flex items-center gap-2 justify-end">
                         <button onClick={() => navigate(`/requests/new?clientId=${c.id}&clientName=${encodeURIComponent(clientDisplayName(c))}`)} className="text-xs border border-gray-200 rounded-lg px-2.5 py-1 text-gray-600 hover:bg-gray-50 whitespace-nowrap">+ Request</button>
                         <button onClick={() => navigate(`/quotes/new?clientId=${c.id}&clientName=${encodeURIComponent(clientDisplayName(c))}`)} className="text-xs border border-[#27AE60] rounded-lg px-2.5 py-1 text-[#27AE60] hover:bg-green-50 whitespace-nowrap">+ Quote</button>
+                        <button onClick={e => deleteClient(c.id, e)} className="text-xs text-red-400 hover:text-red-600 hover:underline">Delete</button>
                       </div>
                     </td>
                   </tr>

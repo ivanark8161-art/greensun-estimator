@@ -103,6 +103,12 @@ export default function Requests({ data, setData }: Props) {
     navigate(`/requests/${req.id}`);
   }
 
+  function deleteRequest(id: string) {
+    if (!confirm('Delete this request? This cannot be undone.')) return;
+    const updated = { ...data, requests: (data.requests ?? []).filter(r => r.id !== id) };
+    setData(updated); saveData(updated);
+  }
+
   const requests = data.requests ?? [];
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -204,6 +210,7 @@ export default function Requests({ data, setData }: Props) {
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500">Contact</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500">Requested</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500">Status</th>
+                <th className="w-10" />
               </tr>
             </thead>
             <tbody>
@@ -232,6 +239,14 @@ export default function Requests({ data, setData }: Props) {
                     <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_COLOR[req.status]}`}>
                       {STATUS_LABEL[req.status]}
                     </span>
+                  </td>
+                  <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
+                    <button
+                      onClick={() => deleteRequest(req.id)}
+                      className="text-xs text-red-400 hover:text-red-600 hover:underline"
+                    >
+                      Delete
+                    </button>
                   </td>
                 </tr>
               ))}

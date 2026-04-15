@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import type { AppData, TimeEntry, TimeSheet, TimeSheetRow } from '../types';
 import { saveData } from '../utils/storage';
 import { formatCurrency } from '../utils/calculations';
+import { pushTimesheetToQBO } from '../utils/qboApi';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 
@@ -52,7 +53,7 @@ function WeeklyEntryTab({ data, setData }: Props) {
   const [submitted,  setSubmitted]  = useState(false);
 
   const jobOptions = [
-    ...data.jobs.map(j => ({ id: j.id, label: `${j.jobNumber} · ${j.clientName}` })),
+    ...data.jobs.filter(j => j.status !== 'archived').map(j => ({ id: j.id, label: `${j.jobNumber} · ${j.clientName}` })),
     ...data.contracts.filter(c => !data.jobs.find(j => j.contractId === c.id)).map(c => ({ id: c.id, label: c.clientName })),
     { id: '', label: 'General / Admin' },
   ];
@@ -251,6 +252,24 @@ function ApprovalsTab({ data, setData }: Props) {
   const [viewSheet, setViewSheet] = useState<TimeSheet | null>(null);
   const [rejectNotes, setRejectNotes] = useState('');
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  const [pushingId, setPushingId] = useState<string | null>(null);
+  const [pushError, setPushError] = useState<string | null>(null);
+
+  async function pushToQBO(sheet: TimeSheet) {
+    setPushingId(sheet.id);
+    setPushError(null);
+    try {
+      await pushTimesheetToQBO(sheet, data.employees, data.jobs);
+      const updated: TimeSheet = { ...sheet, qboSyncedAt: new Date().toISOString() };
+      const newData = { ...data, timeSheets: (data.timeSheets ?? []).map(s => s.id === sheet.id ? updated : s) };
+      setData(newData); saveData(newData);
+      if (viewSheet?.id === sheet.id) setViewSheet(updated);
+    } catch (err) {
+      setPushError(err instanceof Error ? err.message : 'Push failed');
+    } finally {
+      setPushingId(null);
+    }
+  }
 
   const pending  = (data.timeSheets ?? []).filter(s => s.status === 'pending');
   const reviewed = (data.timeSheets ?? []).filter(s => s.status !== 'pending')
@@ -362,11 +381,16 @@ function ApprovalsTab({ data, setData }: Props) {
       {reviewed.length > 0 && (
         <div>
           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Review History</h3>
+          {pushError && (
+            <div className="mb-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+              QBO push failed: {pushError}
+            </div>
+          )}
           <div className="card p-0 overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
-                  {['Week','Submitted','Rows','Total Hours','Status',''].map(h => (
+                  {['Week','Submitted','Rows','Total Hours','Status','QBO',''].map(h => (
                     <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">{h}</th>
                   ))}
                 </tr>
@@ -384,6 +408,19 @@ function ApprovalsTab({ data, setData }: Props) {
                       </span>
                       {sheet.rejectionNotes && (
                         <span className="text-xs text-red-500 ml-2 italic">{sheet.rejectionNotes}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {sheet.status === 'approved' && (
+                        sheet.qboSyncedAt
+                          ? <span className="text-xs text-green-600 font-semibold">✓ Synced</span>
+                          : <button
+                              className="text-xs px-2 py-0.5 rounded border border-[#27AE60] text-[#27AE60] hover:bg-green-50 disabled:opacity-40"
+                              disabled={pushingId === sheet.id}
+                              onClick={() => pushToQBO(sheet)}
+                            >
+                              {pushingId === sheet.id ? '…' : '↑ QBO'}
+                            </button>
                       )}
                     </td>
                     <td className="px-4 py-2.5">
@@ -476,13 +513,24 @@ function ApprovalsTab({ data, setData }: Props) {
                 )}
               </div>
             ) : (
-              <div className="flex gap-3 pt-2 border-t">
+              <div className="flex gap-3 pt-2 border-t flex-wrap items-center">
                 <span className={`text-sm px-3 py-2 rounded-xl font-semibold ${
                   viewSheet.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
                 }`}>
                   {viewSheet.status === 'approved' ? '✓ Approved' : '✕ Rejected'}
                   {viewSheet.approvedAt ? ` on ${new Date(viewSheet.approvedAt).toLocaleDateString()}` : ''}
                 </span>
+                {viewSheet.status === 'approved' && (
+                  viewSheet.qboSyncedAt
+                    ? <span className="text-xs text-green-600 font-semibold">✓ Synced to QBO {new Date(viewSheet.qboSyncedAt).toLocaleDateString()}</span>
+                    : <button
+                        className="btn-secondary text-sm"
+                        disabled={pushingId === viewSheet.id}
+                        onClick={() => pushToQBO(viewSheet)}
+                      >
+                        {pushingId === viewSheet.id ? 'Pushing…' : '↑ Push to QBO'}
+                      </button>
+                )}
                 <button className="btn-secondary ml-auto" onClick={() => setViewSheet(null)}>Close</button>
               </div>
             )}
@@ -687,7 +735,7 @@ function AllEntriesTab({ data, setData }: Props) {
   const blendedRate = data.settings.laborRatePerHour;
 
   const jobOptions = [
-    ...data.jobs.map(j => ({ id: j.id, label: `${j.jobNumber} · ${j.clientName}`, type: 'contract' as const })),
+    ...data.jobs.filter(j => j.status !== 'archived').map(j => ({ id: j.id, label: `${j.jobNumber} · ${j.clientName}`, type: 'contract' as const })),
     { id: '', label: 'General / Admin', type: 'general' as const },
   ];
 
@@ -747,7 +795,7 @@ function AllEntriesTab({ data, setData }: Props) {
         </select>
         <select className="input max-w-xs" value={filterJob} onChange={e => setFilterJob(e.target.value)}>
           <option value="all">All Jobs</option>
-          {data.jobs.map(j => <option key={j.id} value={j.id}>{j.jobNumber} · {j.clientName}</option>)}
+          {data.jobs.filter(j => j.status !== 'archived').map(j => <option key={j.id} value={j.id}>{j.jobNumber} · {j.clientName}</option>)}
         </select>
         <button className="btn-primary ml-auto" onClick={() => open()}>+ Manual Entry</button>
       </div>

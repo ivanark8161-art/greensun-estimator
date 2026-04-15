@@ -563,7 +563,7 @@ function AccountingCodesReport({ data }: Props) {
       <div className="flex gap-3 items-center flex-wrap">
         <select className="input max-w-xs" value={filterJob} onChange={e => setFilterJob(e.target.value)}>
           <option value="all">All Jobs</option>
-          {data.jobs.map(j => <option key={j.id} value={j.id}>{j.jobNumber} · {j.clientName}</option>)}
+          {data.jobs.filter(j => j.status !== 'archived').map(j => <option key={j.id} value={j.id}>{j.jobNumber} · {j.clientName}</option>)}
         </select>
         <div className="ml-auto flex gap-4 text-sm">
           <span className="text-gray-500">Total Budgeted: <strong className="text-gray-800">{formatCurrency(totalBudgeted)}</strong></span>

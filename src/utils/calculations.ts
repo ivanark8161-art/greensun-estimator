@@ -99,18 +99,24 @@ export function calcTotalMonthlyCost(data: AppData): number {
 }
 
 // ─── Revenue helpers ──────────────────────────────────────────────────────────
+
+/** True only when the contract has a linked job with status 'active'. */
+export function contractHasActiveJob(data: AppData, contractId: string): boolean {
+  return data.jobs.some(j => j.contractId === contractId && j.status === 'active');
+}
+
 export function calcMonthlyRevenue(data: AppData): number {
-  // Only count contracts active in the current calendar month
+  // Only count contracts active in the current calendar month AND with an active job
   const currentMonth = MONTHS[new Date().getMonth()];
   return data.contracts
-    .filter(c => c.status === 'active' && c.activeMonths.includes(currentMonth))
+    .filter(c => c.status === 'active' && c.activeMonths.includes(currentMonth) && contractHasActiveJob(data, c.id))
     .reduce((s, c) => s + c.monthlyRevenue, 0);
 }
 
 export function calcAnnualRevenue(data: AppData): number {
   // Recalculate from live activeMonths so stale annualRevenue fields don't skew results
   return data.contracts
-    .filter(c => c.status === 'active')
+    .filter(c => c.status === 'active' && contractHasActiveJob(data, c.id))
     .reduce((s, c) => s + c.monthlyRevenue * c.activeMonths.length, 0);
 }
 
@@ -235,9 +241,9 @@ export function calcMonthlyPnL(data: AppData, month: number, year: number) {
   const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const laborRate   = data.settings.laborRatePerHour;
 
-  // Revenue from active contracts (billing that month)
+  // Revenue from active contracts with active jobs (billing that month)
   const contractRevenue = data.contracts
-    .filter(c => c.status === 'active')
+    .filter(c => c.status === 'active' && contractHasActiveJob(data, c.id))
     .reduce((s, c) => s + c.monthlyRevenue, 0);
 
   // Snow revenue that month

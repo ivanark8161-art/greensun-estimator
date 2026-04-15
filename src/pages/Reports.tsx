@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { AppData } from '../types';
 import {
   calcMonthlyPnL, calcJobCostingForContract, calcJobCostingForProject,
-  calcOutstandingInvoices, formatCurrency, formatPercent,
+  calcOutstandingInvoices, contractHasActiveJob, formatCurrency, formatPercent,
 } from '../utils/calculations';
 import PageHeader from '../components/PageHeader';
 
@@ -126,13 +126,16 @@ function PnLReport({ data }: Props) {
 
 // ─── Job Costing ──────────────────────────────────────────────────────────────
 function JobCostingReport({ data }: Props) {
-  const contractRows = data.contracts.map(c => ({
-    id: c.id,
-    name: c.clientName,
-    type: 'Contract' as const,
-    status: c.status,
-    summary: calcJobCostingForContract(c, data),
-  }));
+  // Only include contracts that have a linked active job
+  const contractRows = data.contracts
+    .filter(c => data.jobs.some(j => j.contractId === c.id && j.status === 'active'))
+    .map(c => ({
+      id: c.id,
+      name: c.clientName,
+      type: 'Contract' as const,
+      status: c.status,
+      summary: calcJobCostingForContract(c, data),
+    }));
 
   const projectRows = data.projects.map(p => ({
     id: p.id,
@@ -327,7 +330,7 @@ function CrewProductivityReport({ data }: Props) {
 // ─── Revenue Forecast ─────────────────────────────────────────────────────────
 function RevenueForecastReport({ data }: Props) {
   const now = new Date();
-  const activeContracts = data.contracts.filter(c => c.status === 'active');
+  const activeContracts = data.contracts.filter(c => c.status === 'active' && contractHasActiveJob(data, c.id));
   const monthlyContractRevenue = activeContracts.reduce((s, c) => s + c.monthlyRevenue, 0);
   const annualContractRevenue  = activeContracts.reduce((s, c) => s + c.annualRevenue, 0);
   const outstandingInvoices    = calcOutstandingInvoices(data);

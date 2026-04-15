@@ -8,6 +8,7 @@ import {
   calcSnowSeasonRevenue,
   calcOutstandingInvoices,
   calcCollectedRevenue,
+  contractHasActiveJob,
   formatCurrency,
   formatPercent,
 } from '../utils/calculations';
@@ -24,7 +25,7 @@ export default function Dashboard({ data }: Props) {
   const snowRevenue     = calcSnowSeasonRevenue(data);
   const outstanding     = calcOutstandingInvoices(data);
   const collected       = calcCollectedRevenue(data);
-  const activeContracts = data.contracts.filter(c => c.status === 'active');
+  const activeContracts = data.contracts.filter(c => c.status === 'active' && contractHasActiveJob(data, c.id));
 
   const overdueInvoices = data.invoices.filter(i => i.status === 'overdue');
   const pendingInvoices = data.invoices.filter(i => i.status === 'sent');

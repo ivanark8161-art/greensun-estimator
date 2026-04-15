@@ -8,7 +8,7 @@ import PageHeader from '../components/PageHeader';
 
 interface Props { data: AppData }
 
-type ReportTab = 'pnl' | 'jobcosting' | 'crew' | 'forecast';
+type ReportTab = 'pnl' | 'jobcosting' | 'crew' | 'forecast' | 'codes';
 
 // ─── Monthly P&L ──────────────────────────────────────────────────────────────
 function PnLReport({ data }: Props) {
@@ -444,6 +444,218 @@ function RevenueForecastReport({ data }: Props) {
   );
 }
 
+// ─── Accounting Codes Report ──────────────────────────────────────────────────
+function AccountingCodesReport({ data }: Props) {
+  const [filterJob, setFilterJob] = useState('all');
+
+  // Build a map of accountingCode.id → { code, name, budgeted, actual } across all jobs
+  // Labor codes (01-xxx): come from TimeEntry.costCodeId
+  // Other codes (02-05): come from resource items linked to jobs via costCode field
+  //   and from ExpenseEntry.costCodeId
+
+  const activejobs = data.jobs.filter(j => j.status === 'active' || j.status === 'completed');
+  const jobsToShow = filterJob === 'all' ? activejobs : activejobs.filter(j => j.id === filterJob);
+
+  // Collect all accounting codes with spending data
+  interface CodeRow {
+    codeId: string;
+    code: string;
+    name: string;
+    budgeted: number;   // sum of job costCode budgeted for mapped category
+    actual: number;     // sum of TimeEntries + Expenses tagged to this code
+    jobs: string[];     // job numbers this appears on
+  }
+
+  const codeMap = new Map<string, CodeRow>();
+
+  function getOrCreate(ac: { id: string; code: string; name: string }): CodeRow {
+    if (!codeMap.has(ac.id)) {
+      codeMap.set(ac.id, { codeId: ac.id, code: ac.code, name: ac.name, budgeted: 0, actual: 0, jobs: [] });
+    }
+    return codeMap.get(ac.id)!;
+  }
+
+  // 1. Time entries → labor codes (01-xxx)
+  data.timeEntries.forEach(te => {
+    if (!te.costCodeId) return;
+    const ac = data.accountingCodes.find(a => a.id === te.costCodeId);
+    if (!ac) return;
+    const job = data.jobs.find(j => j.id === te.jobId);
+    if (filterJob !== 'all' && (!job || job.id !== filterJob)) return;
+    const row = getOrCreate(ac);
+    const emp = data.employees.find(e => e.id === te.employeeId);
+    row.actual += te.hours * (emp?.hourlyRate ?? data.settings.laborRatePerHour);
+    if (job && !row.jobs.includes(job.jobNumber)) row.jobs.push(job.jobNumber);
+  });
+
+  // 2. Expenses → any cost code
+  data.expenses.filter(e => e.status === 'approved').forEach(exp => {
+    if (!exp.costCodeId) return;
+    const ac = data.accountingCodes.find(a => a.id === exp.costCodeId);
+    if (!ac) return;
+    const job = data.jobs.find(j => j.id === exp.jobId);
+    if (filterJob !== 'all' && (!job || job.id !== filterJob)) return;
+    const row = getOrCreate(ac);
+    row.actual += exp.amount;
+    if (job && !row.jobs.includes(job.jobNumber)) row.jobs.push(job.jobNumber);
+  });
+
+  // 3. Job costCodes → budgeted amounts, mapped to accounting codes via category
+  //    Labor (01) → category: labor
+  //    Materials/Supplies (02) → category: materials
+  //    Subcontractor (03) → category: subcontractor
+  //    Equipment (04) → category: equipment
+  //    Other/Overhead (05) → category: other
+  // For budgeted, spread each job's cost code budgeted amount across all codes in that category
+  const categoryToPrefix: Record<string, string> = {
+    labor: '01', materials: '02', subcontractor: '03', equipment: '04', other: '05',
+  };
+
+  jobsToShow.forEach(job => {
+    job.costCodes.forEach(cc => {
+      const prefix = categoryToPrefix[cc.category];
+      if (!prefix) return;
+      const codesInCategory = data.accountingCodes.filter(a => a.code.startsWith(prefix + '-'));
+      if (codesInCategory.length === 0) return;
+      const perCode = cc.budgeted / codesInCategory.length;
+      codesInCategory.forEach(ac => {
+        const row = getOrCreate(ac);
+        row.budgeted += perCode;
+        if (!row.jobs.includes(job.jobNumber)) row.jobs.push(job.jobNumber);
+      });
+    });
+  });
+
+  const rows = [...codeMap.values()].sort((a, b) => a.code.localeCompare(b.code));
+  const totalBudgeted = rows.reduce((s, r) => s + r.budgeted, 0);
+  const totalActual   = rows.reduce((s, r) => s + r.actual, 0);
+
+  // Group by prefix for display sections
+  const prefixLabels: Record<string, string> = {
+    '01': '01 — Labor',
+    '02': '02 — Materials / Field Supplies',
+    '03': '03 — Subcontractors',
+    '04': '04 — Equipment',
+    '05': '05 — Overhead / Other',
+  };
+  const grouped = new Map<string, CodeRow[]>();
+  rows.forEach(r => {
+    const prefix = r.code.split('-')[0];
+    if (!grouped.has(prefix)) grouped.set(prefix, []);
+    grouped.get(prefix)!.push(r);
+  });
+
+  // Also show codes with no entries yet (from accountingCodes list)
+  const allCodes = data.accountingCodes;
+  const unseenCodes = allCodes.filter(ac => !codeMap.has(ac.id));
+  unseenCodes.forEach(ac => {
+    const prefix = ac.code.split('-')[0];
+    if (!grouped.has(prefix)) grouped.set(prefix, []);
+    // Only show if not already there
+    if (!grouped.get(prefix)!.find(r => r.codeId === ac.id)) {
+      grouped.get(prefix)!.push({ codeId: ac.id, code: ac.code, name: ac.name, budgeted: 0, actual: 0, jobs: [] });
+    }
+  });
+
+  return (
+    <div className="space-y-5">
+      {/* Filter */}
+      <div className="flex gap-3 items-center flex-wrap">
+        <select className="input max-w-xs" value={filterJob} onChange={e => setFilterJob(e.target.value)}>
+          <option value="all">All Jobs</option>
+          {data.jobs.map(j => <option key={j.id} value={j.id}>{j.jobNumber} · {j.clientName}</option>)}
+        </select>
+        <div className="ml-auto flex gap-4 text-sm">
+          <span className="text-gray-500">Total Budgeted: <strong className="text-gray-800">{formatCurrency(totalBudgeted)}</strong></span>
+          <span className="text-gray-500">Total Actual: <strong className={totalActual > totalBudgeted ? 'text-red-600' : 'text-amber-700'}>{formatCurrency(totalActual)}</strong></span>
+        </div>
+      </div>
+
+      {data.accountingCodes.length === 0 ? (
+        <div className="card text-center py-10 text-gray-400">
+          <p className="text-sm">No accounting codes set up yet.</p>
+          <p className="text-xs mt-1">Add codes in <strong>Resources → Accounting Codes</strong>.</p>
+        </div>
+      ) : (
+        [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([prefix, codeRows]) => {
+          const groupBudgeted = codeRows.reduce((s, r) => s + r.budgeted, 0);
+          const groupActual   = codeRows.reduce((s, r) => s + r.actual, 0);
+          const groupOver     = groupActual > groupBudgeted && groupBudgeted > 0;
+
+          return (
+            <div key={prefix} className="card p-0 overflow-hidden">
+              {/* Group header */}
+              <div className={`px-4 py-3 flex items-center justify-between ${groupOver ? 'bg-red-50' : 'bg-gray-50'} border-b border-gray-200`}>
+                <h3 className="text-sm font-bold text-gray-700">{prefixLabels[prefix] ?? `${prefix} — Other`}</h3>
+                <div className="flex gap-6 text-xs">
+                  <span className="text-gray-500">Budgeted: <strong className="text-gray-800">{formatCurrency(groupBudgeted)}</strong></span>
+                  <span className="text-gray-500">Actual: <strong className={groupOver ? 'text-red-600' : 'text-amber-700'}>{formatCurrency(groupActual)}</strong></span>
+                  {groupBudgeted > 0 && (
+                    <span className={`font-semibold ${groupOver ? 'text-red-600' : 'text-green-600'}`}>
+                      {groupOver ? '▲' : '▼'} {formatCurrency(Math.abs(groupActual - groupBudgeted))} {groupOver ? 'over' : 'under'}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-white border-b border-gray-100">
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 w-24">Code</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400">Name</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 w-28">Budgeted</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 w-28">Actual</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 w-28">Variance</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400">Jobs</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {codeRows.sort((a, b) => a.code.localeCompare(b.code)).map(r => {
+                    const variance = r.budgeted - r.actual;
+                    const over = r.actual > r.budgeted && r.budgeted > 0;
+                    const pctUsed = r.budgeted > 0 ? Math.min((r.actual / r.budgeted) * 100, 100) : 0;
+                    return (
+                      <tr key={r.codeId} className="hover:bg-gray-50">
+                        <td className="px-4 py-2.5 font-mono text-xs font-semibold text-gray-500">{r.code}</td>
+                        <td className="px-4 py-2.5 text-gray-800 font-medium">{r.name}</td>
+                        <td className="px-4 py-2.5 text-right text-gray-600">
+                          {r.budgeted > 0 ? formatCurrency(r.budgeted) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          {r.actual > 0 ? (
+                            <div>
+                              <span className={`font-semibold ${over ? 'text-red-600' : 'text-amber-700'}`}>{formatCurrency(r.actual)}</span>
+                              {r.budgeted > 0 && (
+                                <div className="w-20 bg-gray-100 rounded-full h-1 mt-1 ml-auto">
+                                  <div className={`h-1 rounded-full ${over ? 'bg-red-400' : 'bg-amber-400'}`} style={{ width: `${pctUsed}%` }} />
+                                </div>
+                              )}
+                            </div>
+                          ) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-xs font-semibold">
+                          {r.budgeted > 0 ? (
+                            <span className={variance >= 0 ? 'text-green-600' : 'text-red-600'}>
+                              {variance >= 0 ? '+' : ''}{formatCurrency(variance)}
+                            </span>
+                          ) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-2.5 text-xs text-gray-400">
+                          {r.jobs.length > 0 ? r.jobs.slice(0, 4).join(', ') + (r.jobs.length > 4 ? ` +${r.jobs.length - 4}` : '') : <span className="text-gray-300">—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 // ─── Main Reports Page ────────────────────────────────────────────────────────
 export default function Reports({ data }: Props) {
   const [tab, setTab] = useState<ReportTab>('pnl');
@@ -453,6 +665,7 @@ export default function Reports({ data }: Props) {
     { key: 'jobcosting', label: 'Job Costing',        desc: 'Est vs actual vs projected per job' },
     { key: 'crew',       label: 'Crew Productivity',  desc: 'Hours & cost by employee' },
     { key: 'forecast',   label: 'Revenue Forecast',   desc: 'Next 3 months + pipeline' },
+    { key: 'codes',      label: 'Accounting Codes',   desc: 'Spending by code across all jobs' },
   ];
 
   return (
@@ -463,7 +676,7 @@ export default function Reports({ data }: Props) {
       />
 
       {/* Report selector */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
         {TABS.map(t => (
           <button
             key={t.key}
@@ -486,6 +699,7 @@ export default function Reports({ data }: Props) {
         {tab === 'jobcosting' && <JobCostingReport         data={data} />}
         {tab === 'crew'       && <CrewProductivityReport   data={data} />}
         {tab === 'forecast'   && <RevenueForecastReport    data={data} />}
+        {tab === 'codes'      && <AccountingCodesReport    data={data} />}
       </div>
     </div>
   );

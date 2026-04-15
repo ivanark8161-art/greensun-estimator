@@ -282,8 +282,49 @@ function ScheduleTab({
   const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
   function saveLog(log: VisitLog) {
-    const existing = (job.visitLogs ?? []).filter(l => l.visitDate !== log.visitDate);
-    updateJob({ ...job, visitLogs: [...existing, log] });
+    const existingLogs = (job.visitLogs ?? []).filter(l => l.visitDate !== log.visitDate);
+    const wasAlreadyLogged = !!(job.visitLogs ?? []).find(l => l.visitDate === log.visitDate);
+
+    // ── Equipment auto-charge ──────────────────────────────────────────────
+    // Only charge on first log of each visit (not re-edits)
+    let updatedCostCodes = job.costCodes;
+    if (!wasAlreadyLogged) {
+      // Resolve which crew/equipment to use
+      const activeCrew = log.crewId
+        ? data.crews.find(c => c.id === log.crewId)
+        : crew;
+      const equipIds = activeCrew?.equipmentIds ?? [];
+      const visitCount = Math.max(job.visitsPerMonth, 1);
+
+      // Per-visit depreciation cost = monthly depreciation / visits per month
+      const perVisitEquipCost = equipIds.reduce((sum, eqId) => {
+        const eq = data.equipment.find(e => e.id === eqId);
+        return sum + (eq ? eq.monthlyDepreciation / visitCount : 0);
+      }, 0);
+
+      if (perVisitEquipCost > 0) {
+        updatedCostCodes = job.costCodes.map(cc =>
+          cc.category === 'equipment'
+            ? { ...cc, actual: parseFloat((cc.actual + perVisitEquipCost).toFixed(2)) }
+            : cc
+        );
+        // If no equipment cost code exists yet, add one
+        if (!job.costCodes.find(cc => cc.category === 'equipment')) {
+          updatedCostCodes = [...updatedCostCodes, {
+            category: 'equipment' as const,
+            budgeted: 0,
+            actual: parseFloat(perVisitEquipCost.toFixed(2)),
+            notes: '',
+          }];
+        }
+      }
+    }
+
+    updateJob({
+      ...job,
+      visitLogs: [...existingLogs, log],
+      costCodes: updatedCostCodes,
+    });
     setLogTarget(null);
   }
 

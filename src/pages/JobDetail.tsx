@@ -520,29 +520,82 @@ function InvoicesTab({ job, data, onViewInvoice }: { job: Job; data: AppData; on
 }
 
 // ─── Projection Tab ────────────────────────────────────────────────────────────
-// Columns: Cost Code | Estimated (locked) | Budgeted (editable) | Actual (locked) | Remaining (Budgeted−Actual) | Projected (Actual+Remaining) | Variance (Estimated−Projected)
+// Category-level rows: Estimated | Budgeted (editable) | Actual | Remaining | Projected | Variance
+// Sub-code rows (expandable): Actual breakdown by accounting code + untagged remainder
 function ProjectionTab({ job, data, setData }: { job: Job; data: AppData; setData: (d: AppData) => void }) {
   const [budgetDraft, setBudgetDraft] = useState<Record<CostCodeCategory, number>>(
     Object.fromEntries(job.costCodes.map(c => [c.category, c.budgeted])) as Record<CostCodeCategory, number>
   );
-  const [editing, setEditing] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [editing,    setEditing]    = useState(false);
+  const [saved,      setSaved]      = useState(false);
+  const [expanded,   setExpanded]   = useState<Set<CostCodeCategory>>(new Set());
 
-  const contract = data.contracts.find(c => c.id === job.contractId);
+  const contract         = data.contracts.find(c => c.id === job.contractId);
   const estimatedRevenue = contract ? contract.annualRevenue ?? contract.subtotalRevenue : 0;
 
-  // Build rows: Estimated comes from the original budgeted snapshot (locked at job creation)
-  // The "Estimated" column = the original costCodes.budgeted values (never changes)
-  // "Budgeted" = user-editable working budget (starts equal to estimated)
-  const rows = job.costCodes.map(cc => {
-    const budgeted   = editing ? budgetDraft[cc.category] ?? cc.budgeted : cc.budgeted;
-    const actual     = cc.actual;
-    const remaining  = Math.max(0, budgeted - actual);
-    const projected  = actual + remaining;
-    // Estimated = what was on the original quote (locked). We store it as budgeted initially,
-    // but surface it separately. For now estimated === cc.budgeted (user hasn't changed budgeted).
-    // Once user edits budgeted, estimated stays as original.
-    return { category: cc.category, estimated: cc.budgeted, budgeted, actual, remaining, projected };
+  // ── Category → accounting code prefix map ────────────────────────────────────
+  const categoryPrefix: Record<CostCodeCategory, string> = {
+    labor: '01', materials: '02', subcontractor: '03', equipment: '04', other: '05',
+  };
+
+  // ── Compute sub-code actuals ─────────────────────────────────────────────────
+  // For each accounting code, sum up actual spending tied to this job
+  const subActualByCode = new Map<string, number>(); // codeId → dollar actual
+
+  // Labor (01-xxx): from approved TimeEntries tagged to this job
+  data.timeEntries
+    .filter(te => te.jobId === job.id && te.costCodeId)
+    .forEach(te => {
+      const emp  = data.employees.find(e => e.id === te.employeeId);
+      const cost = te.hours * (emp?.hourlyRate ?? data.settings.laborRatePerHour);
+      subActualByCode.set(te.costCodeId!, (subActualByCode.get(te.costCodeId!) ?? 0) + cost);
+    });
+
+  // Expenses (02-05): from approved expenses tagged to this job
+  data.expenses
+    .filter(exp => exp.status === 'approved' && exp.jobId === job.id && exp.costCodeId)
+    .forEach(exp => {
+      subActualByCode.set(exp.costCodeId!, (subActualByCode.get(exp.costCodeId!) ?? 0) + exp.amount);
+    });
+
+  // ── Build display rows ────────────────────────────────────────────────────────
+  interface SubRow {
+    codeId:  string;
+    code:    string;
+    name:    string;
+    actual:  number;
+  }
+
+  interface CategoryRow {
+    category:  CostCodeCategory;
+    estimated: number;
+    budgeted:  number;
+    actual:    number;
+    remaining: number;
+    projected: number;
+    subRows:   SubRow[];
+    untagged:  number;  // actual not attributable to any specific code
+  }
+
+  const rows: CategoryRow[] = job.costCodes.map(cc => {
+    const budgeted  = editing ? (budgetDraft[cc.category] ?? cc.budgeted) : cc.budgeted;
+    const actual    = cc.actual;
+    const remaining = Math.max(0, budgeted - actual);
+    const projected = actual + remaining;
+
+    // Sub-code rows: find accounting codes whose prefix matches this category
+    const prefix = categoryPrefix[cc.category];
+    const codesForCategory = data.accountingCodes.filter(ac => ac.code.startsWith(prefix + '-'));
+
+    const subRows: SubRow[] = codesForCategory
+      .map(ac => ({ codeId: ac.id, code: ac.code, name: ac.name, actual: subActualByCode.get(ac.id) ?? 0 }))
+      .filter(sr => sr.actual > 0)
+      .sort((a, b) => a.code.localeCompare(b.code));
+
+    const taggedTotal = subRows.reduce((s, sr) => s + sr.actual, 0);
+    const untagged    = Math.max(0, actual - taggedTotal);
+
+    return { category: cc.category, estimated: cc.budgeted, budgeted, actual, remaining, projected, subRows, untagged };
   });
 
   const totalEst       = rows.reduce((s, r) => s + r.estimated, 0);
@@ -554,6 +607,14 @@ function ProjectionTab({ job, data, setData }: { job: Job; data: AppData; setDat
 
   const estMargin  = estimatedRevenue > 0 ? ((estimatedRevenue - totalEst) / estimatedRevenue) * 100 : 0;
   const projMargin = estimatedRevenue > 0 ? ((estimatedRevenue - totalProjected) / estimatedRevenue) * 100 : 0;
+
+  function toggleExpand(cat: CostCodeCategory) {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat); else next.add(cat);
+      return next;
+    });
+  }
 
   function saveEdits() {
     const newCodes = job.costCodes.map(cc => ({
@@ -580,6 +641,8 @@ function ProjectionTab({ job, data, setData }: { job: Job; data: AppData; setDat
     if (now <= start) return 0;
     return Math.round(((now - start) / (end - start)) * 100);
   })();
+
+  const hasSubCodes = rows.some(r => r.subRows.length > 0 || r.untagged > 0);
 
   return (
     <div className="space-y-4">
@@ -616,7 +679,12 @@ function ProjectionTab({ job, data, setData }: { job: Job; data: AppData; setDat
       {/* Table */}
       <div className="card p-0 overflow-x-auto">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-          <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Cost Code Projection</h3>
+          <div className="flex items-center gap-3">
+            <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Cost Code Projection</h3>
+            {hasSubCodes && (
+              <span className="text-xs text-gray-400 italic">Click a category row to expand sub-codes</span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             {saved && <span className="text-xs text-green-600 bg-green-50 px-3 py-1 rounded-full">Saved ✓</span>}
             {editing ? (
@@ -629,7 +697,8 @@ function ProjectionTab({ job, data, setData }: { job: Job; data: AppData; setDat
             )}
           </div>
         </div>
-        <table className="w-full text-sm min-w-[800px]">
+
+        <table className="w-full text-sm min-w-[820px]">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Cost Code</th>
@@ -641,33 +710,122 @@ function ProjectionTab({ job, data, setData }: { job: Job; data: AppData; setDat
               <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Variance</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
+          <tbody>
             {rows.map(r => {
-              const variance = r.estimated - r.projected;
-              const over = r.actual > r.budgeted;
+              const variance   = r.estimated - r.projected;
+              const over       = r.actual > r.budgeted;
+              const isExpanded = expanded.has(r.category);
+              const hasDetail  = r.subRows.length > 0 || r.untagged > 0;
+
               return (
-                <tr key={r.category} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-semibold text-gray-800">{COST_CODE_LABELS[r.category]}</td>
-                  <td className="px-4 py-3 text-right text-gray-600">{fmtDec(r.estimated)}</td>
-                  <td className="px-4 py-3 text-right">
-                    {editing ? (
-                      <input
-                        type="number" min="0" step="1"
-                        className="input w-28 text-sm py-1 text-right"
-                        value={budgetDraft[r.category] ?? r.budgeted}
-                        onChange={e => setBudgetDraft(d => ({ ...d, [r.category]: Number(e.target.value) }))}
-                      />
-                    ) : (
-                      <span className="font-semibold text-blue-700">{fmtDec(r.budgeted)}</span>
-                    )}
-                  </td>
-                  <td className={`px-4 py-3 text-right font-semibold ${over ? 'text-red-600' : 'text-amber-700'}`}>{fmtDec(r.actual)}</td>
-                  <td className="px-4 py-3 text-right text-gray-600">{fmtDec(r.remaining)}</td>
-                  <td className={`px-4 py-3 text-right font-semibold ${r.projected > r.estimated ? 'text-red-600' : 'text-gray-800'}`}>{fmtDec(r.projected)}</td>
-                  <td className={`px-4 py-3 text-right font-semibold ${variance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {variance >= 0 ? '+' : ''}{fmtDec(variance)}
-                  </td>
-                </tr>
+                <>
+                  {/* ── Category row ── */}
+                  <tr
+                    key={r.category}
+                    className={`border-b border-gray-100 ${hasDetail ? 'cursor-pointer hover:bg-gray-50' : 'hover:bg-gray-50'}`}
+                    onClick={() => hasDetail && toggleExpand(r.category)}
+                  >
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        {hasDetail ? (
+                          <span className="text-gray-400 text-xs w-4 text-center select-none">
+                            {isExpanded ? '▼' : '▶'}
+                          </span>
+                        ) : (
+                          <span className="w-4" />
+                        )}
+                        <span className="font-semibold text-gray-800">{COST_CODE_LABELS[r.category]}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-600">{fmtDec(r.estimated)}</td>
+                    <td className="px-4 py-3 text-right" onClick={e => editing && e.stopPropagation()}>
+                      {editing ? (
+                        <input
+                          type="number" min="0" step="1"
+                          className="input w-28 text-sm py-1 text-right"
+                          value={budgetDraft[r.category] ?? r.budgeted}
+                          onChange={e => setBudgetDraft(d => ({ ...d, [r.category]: Number(e.target.value) }))}
+                        />
+                      ) : (
+                        <span className="font-semibold text-blue-700">{fmtDec(r.budgeted)}</span>
+                      )}
+                    </td>
+                    <td className={`px-4 py-3 text-right font-semibold ${over ? 'text-red-600' : 'text-amber-700'}`}>
+                      {fmtDec(r.actual)}
+                      {r.budgeted > 0 && (
+                        <div className="w-20 bg-gray-100 rounded-full h-1 mt-1 ml-auto">
+                          <div
+                            className={`h-1 rounded-full ${over ? 'bg-red-400' : 'bg-amber-400'}`}
+                            style={{ width: `${Math.min((r.actual / r.budgeted) * 100, 100)}%` }}
+                          />
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-600">{fmtDec(r.remaining)}</td>
+                    <td className={`px-4 py-3 text-right font-semibold ${r.projected > r.estimated ? 'text-red-600' : 'text-gray-800'}`}>{fmtDec(r.projected)}</td>
+                    <td className={`px-4 py-3 text-right font-semibold ${variance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {variance >= 0 ? '+' : ''}{fmtDec(variance)}
+                    </td>
+                  </tr>
+
+                  {/* ── Sub-code rows (only when expanded) ── */}
+                  {isExpanded && (
+                    <>
+                      {r.subRows.map(sr => {
+                        const pct = r.actual > 0 ? (sr.actual / r.actual) * 100 : 0;
+                        return (
+                          <tr key={sr.codeId} className="border-b border-gray-50 bg-gray-50/40">
+                            <td className="pl-10 pr-4 py-2">
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono text-xs text-gray-400">{sr.code}</span>
+                                <span className="text-xs text-gray-600">{sr.name}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-2 text-right text-gray-300 text-xs">—</td>
+                            <td className="px-4 py-2 text-right text-gray-300 text-xs">—</td>
+                            <td className="px-4 py-2 text-right">
+                              <span className="text-sm font-semibold text-amber-700">{fmtDec(sr.actual)}</span>
+                              <div className="flex items-center gap-1.5 justify-end mt-0.5">
+                                <div className="w-16 bg-gray-200 rounded-full h-1">
+                                  <div className="h-1 rounded-full bg-amber-400" style={{ width: `${pct}%` }} />
+                                </div>
+                                <span className="text-[10px] text-gray-400">{Math.round(pct)}%</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-2 text-right text-gray-300 text-xs">—</td>
+                            <td className="px-4 py-2 text-right text-gray-300 text-xs">—</td>
+                            <td className="px-4 py-2 text-right text-gray-300 text-xs">—</td>
+                          </tr>
+                        );
+                      })}
+
+                      {/* Untagged row — actual not tied to any code */}
+                      {r.untagged > 0 && (
+                        <tr className="border-b border-gray-50 bg-gray-50/40">
+                          <td className="pl-10 pr-4 py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-400 italic">Untagged</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2 text-right text-gray-300 text-xs">—</td>
+                          <td className="px-4 py-2 text-right text-gray-300 text-xs">—</td>
+                          <td className="px-4 py-2 text-right">
+                            <span className="text-sm text-gray-400">{fmtDec(r.untagged)}</span>
+                            <div className="flex items-center gap-1.5 justify-end mt-0.5">
+                              <div className="w-16 bg-gray-200 rounded-full h-1">
+                                <div className="h-1 rounded-full bg-gray-300" style={{ width: `${r.actual > 0 ? (r.untagged / r.actual) * 100 : 0}%` }} />
+                              </div>
+                              <span className="text-[10px] text-gray-400">{r.actual > 0 ? Math.round((r.untagged / r.actual) * 100) : 0}%</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2 text-right text-gray-300 text-xs">—</td>
+                          <td className="px-4 py-2 text-right text-gray-300 text-xs">—</td>
+                          <td className="px-4 py-2 text-right text-gray-300 text-xs">—</td>
+                        </tr>
+                      )}
+                    </>
+                  )}
+                </>
               );
             })}
           </tbody>
@@ -690,7 +848,8 @@ function ProjectionTab({ job, data, setData }: { job: Job; data: AppData; setDat
       <p className="text-xs text-gray-400">
         <strong>Estimated</strong> = locked from quote · <strong>Budgeted</strong> = your working budget (editable) ·
         <strong> Remaining</strong> = Budgeted − Actual · <strong>Projected</strong> = Actual + Remaining ·
-        <strong> Variance</strong> = Estimated − Projected
+        <strong> Variance</strong> = Estimated − Projected ·
+        <strong> Sub-codes</strong> = click any category row to see breakdown by accounting code
       </p>
     </div>
   );

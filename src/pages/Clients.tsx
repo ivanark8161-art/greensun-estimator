@@ -51,7 +51,8 @@ function ClientDetailPage({ data, setData }: Props) {
   // Data linked to this client
   const allContracts = data.contracts.filter(c => c.clientId === client.id);
   const quotes       = allContracts.filter(c => ['estimate','draft','awaiting_response','changes_requested','approved'].includes(c.status));
-  const jobs         = allContracts.filter(c => c.status === 'active' || c.status === 'closed');
+  const hasActiveJob = (contractId: string) => data.jobs.some(j => j.contractId === contractId && j.status === 'active');
+  const jobs         = allContracts.filter(c => (c.status === 'active' && hasActiveJob(c.id)) || c.status === 'closed');
   const requests     = (data.requests ?? []).filter(r => r.clientId === client.id);
   const invoices     = (data.invoices ?? []).filter(i => i.clientId === client.id);
   const totalMonthly = jobs.filter(c => c.status === 'active').reduce((s, c) => s + c.monthlyRevenue, 0);
@@ -712,7 +713,7 @@ function ClientListPage({ data, setData }: Props) {
   const navigate = useNavigate();
 
   function clientRevenue(clientId: string) {
-    return data.contracts.filter(c => c.clientId === clientId && c.status === 'active').reduce((s, c) => s + c.monthlyRevenue, 0);
+    return data.contracts.filter(c => c.clientId === clientId && c.status === 'active' && data.jobs.some(j => j.contractId === c.id && j.status === 'active')).reduce((s, c) => s + c.monthlyRevenue, 0);
   }
 
   function deleteClient(id: string, e: { stopPropagation(): void }) {
@@ -755,7 +756,7 @@ function ClientListPage({ data, setData }: Props) {
                 const rev      = clientRevenue(c.id);
                 const primary  = clientPrimaryContact(c);
                 const location = clientDisplayLocation(c);
-                const activeJobs = data.contracts.filter(x => x.clientId === c.id && x.status === 'active').length;
+                const activeJobs = data.contracts.filter(x => x.clientId === c.id && x.status === 'active' && data.jobs.some(j => j.contractId === x.id && j.status === 'active')).length;
                 return (
                   <tr key={c.id} className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer transition-colors" onClick={() => navigate(`/clients/${c.id}`)}>
                     <td className="px-5 py-3">

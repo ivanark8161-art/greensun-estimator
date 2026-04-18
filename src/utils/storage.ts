@@ -310,9 +310,9 @@ export async function loadFromServer(): Promise<AppData | null> {
     if (!res.ok) return null;
     const raw = await res.json() as AppData;
     if (!raw || Object.keys(raw).length === 0) return null;
-    const hasContent = (raw.employees?.length ?? 0) > 0
-      || (raw.contracts?.length ?? 0) > 0
-      || (raw.equipment?.length ?? 0) > 0;
+    // Any non-empty response from the server is authoritative
+    const hasContent = Object.values(raw).some(v => Array.isArray(v) && (v as unknown[]).length > 0)
+      || (raw.settings && Object.keys(raw.settings).length > 0);
     if (!hasContent) return null;
     return applyMigrations(raw);
   } catch {

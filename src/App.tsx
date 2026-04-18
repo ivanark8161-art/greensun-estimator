@@ -70,19 +70,49 @@ function applySSEPatch(data: AppData, event: SSEEvent): AppData {
   const arr = data[key] as { id: string }[];
 
   if (operation === 'delete') {
-    return { ...data, [key]: arr.filter(i => i.id !== docId) };
+    const filtered = arr.filter(i => i.id !== docId);
+    if (filtered.length === arr.length) return data; // nothing removed
+    return { ...data, [key]: filtered };
   }
 
   if (doc) {
     const item = doc as { id: string };
-    const exists = arr.some(i => i.id === item.id);
+    const existing = arr.find(i => i.id === item.id);
+    // Skip if content is identical — avoids echo-triggered re-renders
+    if (existing && JSON.stringify(existing) === JSON.stringify(item)) return data;
     return {
       ...data,
-      [key]: exists ? arr.map(i => i.id === item.id ? item as typeof i : i) : [...arr, item as typeof arr[0]],
+      [key]: existing
+        ? arr.map(i => i.id === item.id ? item as typeof i : i)
+        : [...arr, item as typeof arr[0]],
     };
   }
 
   return data;
+}
+
+// ── Merge server data into local state (add missing items, don't overwrite local edits) ──
+const MERGE_COLLECTIONS = [
+  'clients','contracts','jobs','invoices','snowTrips','timeEntries','expenses',
+  'employees','equipment','overhead','fieldSupplies','subcontractors','crews',
+  'projects','requests','leads','futureBudget','contractTemplates',
+  'salesTaxRates','serviceCatalog','accountingCodes','timeSheets',
+] as const;
+
+function mergeServerData(local: AppData, server: AppData): AppData {
+  let merged = local;
+  let changed = false;
+  for (const col of MERGE_COLLECTIONS) {
+    const sArr = ((server[col as keyof AppData] ?? []) as { id: string }[]);
+    const lArr = ((local[col as keyof AppData] ?? []) as { id: string }[]);
+    const lIds = new Set(lArr.map(i => i.id));
+    const newFromServer = sArr.filter(i => !lIds.has(i.id));
+    if (newFromServer.length > 0) {
+      merged = { ...merged, [col]: [...lArr, ...newFromServer] };
+      changed = true;
+    }
+  }
+  return changed ? merged : local;
 }
 
 export default function App() {
@@ -95,20 +125,14 @@ export default function App() {
 
   // prevDataRef tracks the last version sent to the server — used for diffing
   const prevDataRef = useRef<AppData>(data);
-  // sseActive prevents SSE-received updates from triggering a save back to server
-  const fromSSE = useRef(false);
+  // tracks whether SSE has connected at least once (to detect reconnects)
+  const sseConnectedOnce = useRef(false);
 
   // setData: called by every page on user action — diffs and saves only changes
   const setData = useCallback(async (newData: AppData) => {
     const prev = prevDataRef.current;
     prevDataRef.current = newData;
     setDataRaw(newData);
-
-    if (fromSSE.current) {
-      // This update came from SSE; don't echo it back to the server
-      fromSSE.current = false;
-      return;
-    }
 
     setSyncStatus('saving');
     if (syncTimer.current) clearTimeout(syncTimer.current);
@@ -177,21 +201,51 @@ export default function App() {
     await loadAndSync();
   }, [loadAndSync]);
 
+  // Helper: apply server data into local state (used by SSE reconnect + periodic sync)
+  const applyServerMerge = useCallback((serverData: AppData) => {
+    setDataRaw(prev => {
+      const merged = mergeServerData(prev, serverData);
+      if (merged === prev) return prev;
+      prevDataRef.current = merged;
+      saveData(merged);
+      return merged;
+    });
+  }, []);
+
   // SSE subscription — merge server-pushed changes without saving them back
   useEffect(() => {
     if (!authReady) return;
     const unsubscribe = subscribeToStream((event: SSEEvent) => {
-      if (event.type === 'connected') return; // ignore the initial handshake
+      if (event.type === 'connected') {
+        if (sseConnectedOnce.current) {
+          // Reconnect after a drop — fetch server to catch any missed events
+          loadFromServer().then(serverData => {
+            if (serverData) applyServerMerge(serverData);
+          });
+        }
+        sseConnectedOnce.current = true;
+        return;
+      }
       setDataRaw(prev => {
         const next = applySSEPatch(prev, event);
-        if (next === prev) return prev; // nothing changed
-        prevDataRef.current = next;     // keep the diff ref in sync
-        saveData(next);                 // update localStorage
+        if (next === prev) return prev;
+        prevDataRef.current = next;
+        saveData(next);
         return next;
       });
     });
     return unsubscribe;
-  }, [authReady]);
+  }, [authReady, applyServerMerge]);
+
+  // Periodic background sync — catch any SSE events missed due to network issues
+  useEffect(() => {
+    if (!authReady) return;
+    const interval = setInterval(async () => {
+      const serverData = await loadFromServer();
+      if (serverData) applyServerMerge(serverData);
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [authReady, applyServerMerge]);
 
   if (!authReady)    return <AuthGate loading />;
   if (needsWebLogin) return <AuthGate login onLogin={handleWebLogin} />;

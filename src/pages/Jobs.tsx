@@ -4,6 +4,7 @@ import type {
   AppData, LandscapingProject, ProjectStatus, EstimateLineItem,
 } from '../types';
 import { calcLineItemTotals as calcLIT } from '../types';
+// EstimateLineItem is used in LandscapingTab's addLineItem/updateLineItem
 import { saveData } from '../utils/storage';
 import {
   formatCurrency, formatPercent,
@@ -14,115 +15,6 @@ import Modal from '../components/Modal';
 interface Props { data: AppData; setData: (d: AppData) => void; }
 type MainTab = 'maintenance' | 'landscaping';
 
-// ─── Snow classifier (mirrors QuoteDetail) ────────────────────────────────────
-const SNOW_IDS = new Set(['svc16','svc17','svc18','svc19','svc20','snow_trip']);
-function isSnowItem(i: EstimateLineItem) {
-  return SNOW_IDS.has(i.catalogItemId ?? '') || i.isSnowPerTrip === true;
-}
-
-interface DrillLine { label: string; amount: number; }
-
-function buildDrillDown(
-  category: CostCodeCategory,
-  job: Job,
-  contract: Contract,
-  data: AppData,
-): DrillLine[] {
-  const s = data.settings;
-  const burden = 1 + (s.payrollBurdenPercent ?? 0) / 100;
-  const crew = job.crewId ? data.crews.find(c => c.id === job.crewId) : null;
-  const blendedRate = crew && crew.memberIds.length > 0
-    ? data.employees.filter(e => crew.memberIds.includes(e.id)).reduce((sum, e) => sum + e.hourlyRate * burden, 0)
-    : (s.laborRatePerHour ?? 22) * burden;
-
-  const activeItems  = contract.lineItems.filter(i => !i.optional);
-  const maintItems   = activeItems.filter(i => !isSnowItem(i) && !i.isOneTime);
-  const snowItems    = activeItems.filter(i => isSnowItem(i));
-  const activeMonths = contract.activeMonths?.length ?? 9;
-  const totalVisits  = job.visitsPerMonth * activeMonths;
-  const totalSnowEvents = (s.snowEvents4in ?? 5) + (s.snowEvents1_5in ?? 10) + (s.snowEventsDusting ?? 8);
-
-  if (category === 'labor') {
-    const lines: DrillLine[] = [];
-    maintItems.forEach(li => {
-      const hrs = li.estimatedHours ?? 0;
-      if (hrs <= 0) return;
-      lines.push({
-        label: `${li.name}: ${hrs.toFixed(2)} hrs/visit × ${totalVisits} visits @ $${blendedRate.toFixed(0)}/hr`,
-        amount: hrs * totalVisits * blendedRate,
-      });
-    });
-    if (job.driveTimeMinutes > 0) {
-      const dtHrs = job.driveTimeMinutes / 60;
-      lines.push({
-        label: `Drive time: ${job.driveTimeMinutes} min/visit × ${totalVisits} visits @ $${blendedRate.toFixed(0)}/hr`,
-        amount: dtHrs * totalVisits * blendedRate,
-      });
-    }
-    if (snowItems.length > 0) {
-      const snowHrsPerEvent = snowItems.reduce((sum, i) => sum + (i.estimatedHours ?? 0), 0);
-      if (snowHrsPerEvent > 0) {
-        lines.push({
-          label: `Snow labor: ${snowHrsPerEvent.toFixed(1)} hrs/event × ${totalSnowEvents} events @ $${blendedRate.toFixed(0)}/hr`,
-          amount: snowHrsPerEvent * totalSnowEvents * blendedRate,
-        });
-      }
-    }
-    return lines;
-  }
-
-  if (category === 'materials') {
-    const lines: DrillLine[] = [];
-    const matItems = maintItems.filter(i => !(i.estimatedHours ?? 0) && i.unitCost > 0);
-    matItems.forEach(li => {
-      lines.push({
-        label: `${li.name}: ${li.qty} × $${li.unitCost.toFixed(2)} × ${activeMonths} mo`,
-        amount: li.qty * li.unitCost * activeMonths,
-      });
-    });
-    if (snowItems.length > 0) {
-      const bagsPerTrip = 3;
-      lines.push({
-        label: `De-icing: ${totalSnowEvents} trips × ${bagsPerTrip} bags × $${(s.deicingCostPerBag ?? 15).toFixed(2)}/bag`,
-        amount: totalSnowEvents * bagsPerTrip * (s.deicingCostPerBag ?? 15),
-      });
-    }
-    return lines;
-  }
-
-  if (category === 'equipment') {
-    const lines: DrillLine[] = [];
-    const addEquipLines = (items: EstimateLineItem[], months: number, label: string) => {
-      items.forEach(li => {
-        if (!li.catalogItemId) return;
-        const svc = data.serviceCatalog.find(sv => sv.id === li.catalogItemId);
-        if (!svc?.equipmentIds?.length) return;
-        svc.equipmentIds.forEach(eid => {
-          const eq = data.equipment.find(e => e.id === eid);
-          if (!eq) return;
-          const mo = eq.paymentType === 'monthly_payment' ? eq.monthlyPaymentAmount : eq.monthlyDepreciation;
-          lines.push({
-            label: `${eq.name} (${li.name}): $${mo.toFixed(0)}/mo × ${months} mo${label}`,
-            amount: mo * months,
-          });
-        });
-      });
-    };
-    addEquipLines(maintItems, activeMonths, '');
-    addEquipLines(snowItems, 5, ' snow');
-    return lines;
-  }
-
-  return [];
-}
-
-function fmt(n: number) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
-}
-function fmtDec(n: number) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
-}
-
 // ─── Status configs ────────────────────────────────────────────────────────────
 const PROJ_STATUS_BADGE: Record<ProjectStatus, string> = {
   estimate: 'badge-yellow', approved: 'badge-blue', in_progress: 'badge-purple',
@@ -132,53 +24,6 @@ const PROJ_STATUS_LABELS: Record<ProjectStatus, string> = {
   estimate: 'Estimate', approved: 'Approved', in_progress: 'In Progress',
   completed: 'Completed', invoiced: 'Invoiced', lost: 'Lost',
 };
-
-// ─── Projection helpers ────────────────────────────────────────────────────────
-function pctElapsed(job: Job): number {
-  const start = new Date(job.startDate).getTime();
-  const end   = new Date(job.endDate).getTime();
-  const now   = Date.now();
-  if (now >= end) return 1;
-  if (now <= start) return 0;
-  return (now - start) / (end - start);
-}
-
-function buildProjection(job: Job, invoicedToDate: number, notes: string): JobProjectionSnapshot {
-  const pct = pctElapsed(job);
-  const label = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-  const codes = job.costCodes.map(cc => {
-    const projectedCost = cc.budgeted * pct;
-    const remainingCost = Math.max(0, cc.budgeted - cc.actual);
-    const rev = job.costCodes.reduce((s, c) => s + c.budgeted, 0);
-    const marginPct = rev > 0 ? ((rev - (cc.actual + remainingCost)) / rev) * 100 : 0;
-    return {
-      category: cc.category,
-      originalEstimate: cc.budgeted,
-      actualCost: cc.actual,
-      remainingCost,
-      projectedCost,
-      marginPct,
-    };
-  });
-  const totalOriginal  = codes.reduce((s, c) => s + c.originalEstimate, 0);
-  const totalActual    = codes.reduce((s, c) => s + c.actualCost, 0);
-  const totalRemaining = codes.reduce((s, c) => s + c.remainingCost, 0);
-  const totalProjected = codes.reduce((s, c) => s + c.projectedCost, 0);
-  const projectedMargin = totalOriginal > 0 ? ((totalOriginal - totalProjected) / totalOriginal) * 100 : 0;
-  return {
-    id: `proj_${Date.now()}`,
-    postedAt: new Date().toISOString(),
-    periodLabel: label,
-    costCodes: codes,
-    totalOriginal,
-    totalActual,
-    totalRemaining,
-    totalProjected,
-    projectedMargin,
-    invoicedToDate,
-    notes,
-  };
-}
 
 // ─── Blank project ─────────────────────────────────────────────────────────────
 function blankProject(): Omit<LandscapingProject, 'id' | 'projectNumber' | 'createdAt'> {

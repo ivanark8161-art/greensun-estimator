@@ -1,10 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import type {
-  AppData, Job, JobCostCode, JobProjectionSnapshot, CostCodeCategory,
-  LandscapingProject, ProjectStatus, Contract, EstimateLineItem,
+  AppData, LandscapingProject, ProjectStatus, EstimateLineItem,
 } from '../types';
-import { COST_CODE_LABELS } from '../types';
 import { calcLineItemTotals as calcLIT } from '../types';
 import { saveData } from '../utils/storage';
 import {
@@ -22,7 +20,6 @@ function isSnowItem(i: EstimateLineItem) {
   return SNOW_IDS.has(i.catalogItemId ?? '') || i.isSnowPerTrip === true;
 }
 
-// ─── Drill-down builder ───────────────────────────────────────────────────────
 interface DrillLine { label: string; amount: number; }
 
 function buildDrillDown(
@@ -523,35 +520,18 @@ function LandscapingTab({ data, setData, openProjectId }: Props & { openProjectI
   );
 }
 
+const JOB_STATUS_COLOR: Record<string, string> = {
+  active:    'bg-green-100 text-green-700',
+  on_hold:   'bg-yellow-100 text-yellow-700',
+  completed: 'bg-blue-100 text-blue-700',
+  cancelled: 'bg-gray-100 text-gray-500',
+  archived:  'bg-gray-200 text-gray-400',
+};
+
 // ─── Maintenance Jobs Tab ─────────────────────────────────────────────────────
 function MaintenanceTab({ data, setData }: Props) {
   const navigate = useNavigate();
-  const activeJobs   = data.jobs.filter(j => j.status === 'active');
-  const inactiveJobs = data.jobs.filter(j => j.status !== 'active');
-  const [selectedId] = useState<string | null>(
-    activeJobs.length > 0 ? activeJobs[0].id : null
-  );
-  const [showInactive, setShowInactive] = useState(false);
-  const [detailTab, setDetailTab] = useState<'costcodes' | 'projections' | 'details'>('costcodes');
-  const [editingCodes, setEditingCodes] = useState(false);
-  const [codesDraft, setCodesDraft] = useState<JobCostCode[]>([]);
-  const [showProjectionModal, setShowProjectionModal] = useState(false);
-  const [projNotes, setProjNotes] = useState('');
-  const [showSaved, setShowSaved] = useState(false);
-  const [notesDraft, setNotesDraft] = useState('');
-  const [expandedCodes, setExpandedCodes] = useState<Set<CostCodeCategory>>(new Set());
-
-  const job = data.jobs.find(j => j.id === selectedId) ?? null;
-
-  useEffect(() => { setNotesDraft(job?.notes ?? ''); }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function save(updated: Job) {
-    const newData = { ...data, jobs: data.jobs.map(j => j.id === updated.id ? updated : j) };
-    setData(newData);
-    saveData(newData);
-    setShowSaved(true);
-    setTimeout(() => setShowSaved(false), 2000);
-  }
+  const [statusFilter, setStatusFilter] = useState<string>('active');
 
   function archiveJob(jobId: string, e: { stopPropagation(): void }) {
     e.stopPropagation();
@@ -560,466 +540,92 @@ function MaintenanceTab({ data, setData }: Props) {
     setData(newData); saveData(newData);
   }
 
-  function startEditCodes() {
-    if (!job) return;
-    setCodesDraft(job.costCodes.map(c => ({ ...c })));
-    setEditingCodes(true);
-  }
-
-  function saveCodes() {
-    if (!job) return;
-    save({ ...job, costCodes: codesDraft });
-    setEditingCodes(false);
-  }
-
-  function patchCode(category: CostCodeCategory, field: keyof JobCostCode, value: number | string) {
-    setCodesDraft(d => d.map(c => c.category === category ? { ...c, [field]: value } : c));
-  }
-
-  function postProjection() {
-    if (!job) return;
-    const invoicedToDate = data.invoices
-      .filter(i => i.contractId === job.contractId && i.status !== 'void')
-      .reduce((s, i) => s + i.total, 0);
-    const snap = buildProjection(job, invoicedToDate, projNotes);
-    save({ ...job, projections: [...job.projections, snap], lastProjectionPrompt: new Date().toISOString() });
-    setShowProjectionModal(false);
-    setProjNotes('');
-  }
-
-  function updateField(field: keyof Job, value: unknown) {
-    if (!job) return;
-    save({ ...job, [field]: value });
-  }
-
-  const contract = job ? data.contracts.find(c => c.id === job.contractId) : null;
-  const crew     = job?.crewId ? data.crews.find(c => c.id === job.crewId) : null;
-  const crewMembers = crew ? data.employees.filter(e => crew.memberIds.includes(e.id)) : [];
-
-  const totalBudgeted = job?.costCodes.reduce((s, c) => s + c.budgeted, 0) ?? 0;
-  const totalActual   = job?.costCodes.reduce((s, c) => s + c.actual, 0) ?? 0;
-  const invoicedTotal = job
-    ? data.invoices.filter(i => i.contractId === job.contractId && i.status !== 'void').reduce((s, i) => s + i.total, 0)
-    : 0;
+  const jobs = statusFilter === 'all'
+    ? data.jobs
+    : data.jobs.filter(j => j.status === statusFilter);
 
   return (
-    <div className="flex gap-4" style={{ minHeight: 500 }}>
-      {/* ── Left: job list ── */}
-      <div className="w-56 shrink-0 flex flex-col gap-2">
-        <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Active Jobs</h2>
-        {activeJobs.length === 0 && (
-          <p className="text-xs text-gray-400 italic">No active jobs. Convert a quote to a job from the Quotes page.</p>
-        )}
-        {activeJobs.map(j => (
-          <div key={j.id} className="relative group">
-            <button
-              onClick={() => navigate('/jobs/' + j.id)}
-              className="w-full text-left p-3 rounded-xl border transition-colors bg-white border-gray-200 hover:border-green-300 hover:shadow-sm"
-            >
-              <p className="font-semibold text-sm">{j.jobNumber}</p>
-              <p className="text-xs mt-0.5 text-gray-500">{j.clientName}</p>
-              <p className="text-xs text-gray-400">{j.title}</p>
-              <span className="inline-block mt-1.5 text-[10px] px-2 py-0.5 rounded-full font-semibold bg-green-100 text-green-700">active</span>
-            </button>
-            <button
-              onClick={e => archiveJob(j.id, e)}
-              className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 text-[10px] text-gray-400 hover:text-red-500 px-1.5 py-0.5 rounded transition-all"
-              title="Archive job"
-            >
-              Archive
-            </button>
-          </div>
-        ))}
-
-        {inactiveJobs.length > 0 && (
-          <div className="mt-1">
-            <button
-              onClick={() => setShowInactive(v => !v)}
-              className="text-[10px] text-gray-400 hover:text-gray-600 flex items-center gap-1 w-full py-1"
-            >
-              <span>{showInactive ? '▼' : '▶'}</span>
-              <span>Other ({inactiveJobs.length})</span>
-            </button>
-            {showInactive && inactiveJobs.map(j => (
-              <button
-                key={j.id}
-                onClick={() => navigate('/jobs/' + j.id)}
-                className="w-full text-left p-2.5 mt-1 rounded-xl border transition-colors bg-gray-50 border-gray-100 hover:border-gray-300 opacity-70"
-              >
-                <p className="font-semibold text-xs">{j.jobNumber}</p>
-                <p className="text-[10px] text-gray-500">{j.clientName}</p>
-                <span className={`inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${
-                  j.status === 'completed' ? 'bg-blue-100 text-blue-700' :
-                  j.status === 'on_hold'   ? 'bg-yellow-100 text-yellow-700' :
-                  j.status === 'archived'  ? 'bg-gray-100 text-gray-500' :
-                  'bg-gray-100 text-gray-500'
-                }`}>
-                  {j.status.replace('_', ' ')}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
+    <div className="card p-0">
+      <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100">
+        <p className="font-semibold text-gray-800">
+          Jobs <span className="text-gray-400 font-normal">({jobs.length})</span>
+        </p>
+        <select
+          className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 text-gray-600 focus:outline-none focus:border-[#27AE60]"
+          value={statusFilter}
+          onChange={e => setStatusFilter(e.target.value)}
+        >
+          <option value="active">Active</option>
+          <option value="on_hold">On Hold</option>
+          <option value="completed">Completed</option>
+          <option value="cancelled">Cancelled</option>
+          <option value="archived">Archived</option>
+          <option value="all">All Statuses</option>
+        </select>
       </div>
 
-      {/* ── Right: job detail ── */}
-      {!job && (
-        <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
-          Select a job or convert a quote to get started.
+      {jobs.length === 0 ? (
+        <div className="text-center py-16 text-gray-400">
+          <p className="text-4xl mb-3">🏗</p>
+          <p className="font-medium">No jobs found</p>
+          <p className="text-sm mt-1">Convert an approved quote to create a job</p>
         </div>
-      )}
-
-      {job && (
-        <div className="flex-1 flex flex-col gap-4 min-w-0">
-          {/* Header */}
-          <div className="card">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <h2 className="text-xl font-bold text-gray-900">{job.jobNumber} — {job.title}</h2>
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                    job.status === 'active'    ? 'bg-green-100 text-green-700' :
-                    job.status === 'completed' ? 'bg-blue-100 text-blue-700' :
-                    job.status === 'on_hold'   ? 'bg-yellow-100 text-yellow-700' :
-                    job.status === 'archived'  ? 'bg-gray-200 text-gray-500' :
-                    'bg-gray-100 text-gray-500'
-                  }`}>{job.status.replace('_', ' ')}</span>
-                </div>
-                <p className="text-sm text-gray-500">{job.clientName} · {job.jobType}</p>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  {job.startDate} → {job.endDate} · Crew: {crew?.name ?? 'Unassigned'} · {job.visitsPerMonth} visits/mo · {job.driveTimeMinutes} min drive
-                </p>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {showSaved && <span className="text-xs text-green-600 bg-green-50 px-3 py-1 rounded-full">Saved ✓</span>}
-                <select className="input text-sm py-1" value={job.status}
-                  onChange={e => updateField('status', e.target.value)}>
-                  <option value="active">Active</option>
-                  <option value="on_hold">On Hold</option>
-                  <option value="completed">Completed</option>
-                  <option value="cancelled">Cancelled</option>
-                  <option value="archived">Archived</option>
-                </select>
-                <button className="btn-secondary text-sm px-3 py-1" onClick={() => navigate('/schedule')}>
-                  📅 Schedule
-                </button>
-                <button className="btn-primary text-sm px-3 py-1" onClick={() => setShowProjectionModal(true)}>
-                  + Post Projection
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-4 gap-3 mt-4">
-              {[
-                { label: 'Total Budgeted', value: fmt(totalBudgeted), color: 'text-gray-800' },
-                { label: 'Actual Cost', value: fmt(totalActual), color: totalActual > totalBudgeted ? 'text-red-600' : 'text-gray-800' },
-                { label: 'Remaining', value: fmt(Math.max(0, totalBudgeted - totalActual)), color: 'text-blue-600' },
-                { label: 'Invoiced to Date', value: fmt(invoicedTotal), color: 'text-green-700' },
-              ].map(m => (
-                <div key={m.label} className="bg-gray-50 rounded-xl p-3 text-center">
-                  <p className="text-xs text-gray-400 mb-1">{m.label}</p>
-                  <p className={`text-lg font-bold ${m.color}`}>{m.value}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Tabs */}
-          <div className="flex gap-1 border-b border-gray-200">
-            {(['costcodes', 'projections', 'details'] as const).map(t => (
-              <button key={t} onClick={() => setDetailTab(t)}
-                className={`px-4 py-2 text-sm font-semibold capitalize transition-colors border-b-2 -mb-px ${
-                  detailTab === t ? 'border-[#27AE60] text-[#27AE60]' : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}>
-                {t === 'costcodes' ? 'Cost Codes' : t.charAt(0).toUpperCase() + t.slice(1)}
-              </button>
-            ))}
-          </div>
-
-          {/* ── Cost Codes Tab ── */}
-          {detailTab === 'costcodes' && (
-            <div className="card">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Cost Code Breakdown</h3>
-                {!editingCodes
-                  ? <button className="btn-secondary text-sm px-3 py-1" onClick={startEditCodes}>Edit Budgets</button>
-                  : <div className="flex gap-2">
-                      <button className="btn-secondary text-sm px-3 py-1" onClick={() => setEditingCodes(false)}>Cancel</button>
-                      <button className="btn-primary text-sm px-3 py-1" onClick={saveCodes}>Save</button>
-                    </div>
-                }
-              </div>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    {['Cost Code', 'Budgeted', 'Actual Cost', 'Remaining', '% Used', 'Notes'].map(h => (
-                      <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase py-2 px-2">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(editingCodes ? codesDraft : job.costCodes).flatMap(cc => {
-                    const remaining  = Math.max(0, cc.budgeted - cc.actual);
-                    const pctUsed    = cc.budgeted > 0 ? (cc.actual / cc.budgeted) * 100 : 0;
-                    const over       = cc.actual > cc.budgeted;
-                    const isExpanded = expandedCodes.has(cc.category);
-                    const drillLines = !editingCodes && contract ? buildDrillDown(cc.category, job, contract, data) : [];
-                    const canExpand  = drillLines.length > 0;
-
-                    const toggleExpand = () => setExpandedCodes(prev => {
-                      const next = new Set(prev);
-                      if (next.has(cc.category)) next.delete(cc.category); else next.add(cc.category);
-                      return next;
-                    });
-
-                    const mainRow = (
-                      <tr key={cc.category} className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="py-3 px-2 font-semibold text-gray-800">
-                          <div className="flex items-center gap-1.5">
-                            {!editingCodes && (
-                              <button
-                                onClick={canExpand ? toggleExpand : undefined}
-                                className={`text-[10px] w-4 text-center transition-colors ${canExpand ? 'text-gray-400 hover:text-gray-700 cursor-pointer' : 'text-gray-200 cursor-default'}`}
-                              >
-                                {canExpand ? (isExpanded ? '▼' : '▶') : '▶'}
-                              </button>
-                            )}
-                            {COST_CODE_LABELS[cc.category]}
-                          </div>
-                        </td>
-                        <td className="py-3 px-2">
-                          {editingCodes
-                            ? <input type="number" min="0" step="1" className="input w-28 text-sm py-1"
-                                value={codesDraft.find(c => c.category === cc.category)?.budgeted ?? 0}
-                                onChange={e => patchCode(cc.category, 'budgeted', Number(e.target.value))} />
-                            : <span className="text-gray-700">{fmtDec(cc.budgeted)}</span>
-                          }
-                        </td>
-                        <td className="py-3 px-2">
-                          {editingCodes
-                            ? <input type="number" min="0" step="1" className="input w-28 text-sm py-1"
-                                value={codesDraft.find(c => c.category === cc.category)?.actual ?? 0}
-                                onChange={e => patchCode(cc.category, 'actual', Number(e.target.value))} />
-                            : <span className={over ? 'text-red-600 font-semibold' : 'text-gray-700'}>{fmtDec(cc.actual)}</span>
-                          }
-                        </td>
-                        <td className="py-3 px-2">
-                          <span className={remaining === 0 ? 'text-red-600' : 'text-blue-600'}>{fmtDec(remaining)}</span>
-                        </td>
-                        <td className="py-3 px-2">
-                          <div className="flex items-center gap-2">
-                            <div className="w-20 bg-gray-200 rounded-full h-1.5">
-                              <div className={`h-1.5 rounded-full ${over ? 'bg-red-500' : 'bg-green-500'}`}
-                                style={{ width: `${Math.min(pctUsed, 100)}%` }} />
-                            </div>
-                            <span className={`text-xs ${over ? 'text-red-600' : 'text-gray-500'}`}>{Math.round(pctUsed)}%</span>
-                          </div>
-                        </td>
-                        <td className="py-3 px-2">
-                          {editingCodes
-                            ? <input className="input text-sm py-1 w-full"
-                                value={codesDraft.find(c => c.category === cc.category)?.notes ?? ''}
-                                onChange={e => patchCode(cc.category, 'notes', e.target.value)} />
-                            : <span className="text-gray-400 text-xs">{cc.notes || '—'}</span>
-                          }
-                        </td>
-                      </tr>
-                    );
-
-                    const detailRows = isExpanded && !editingCodes ? drillLines.map((line, i) => (
-                      <tr key={`${cc.category}_d${i}`} className="bg-blue-50/40 border-b border-blue-100/60">
-                        <td className="py-1.5 pl-8 pr-2 text-xs text-gray-500 italic" colSpan={2}>{line.label}</td>
-                        <td className="py-1.5 px-2 text-xs text-gray-500">{fmtDec(line.amount)}</td>
-                        <td colSpan={3} />
-                      </tr>
-                    )) : [];
-
-                    return [mainRow, ...detailRows];
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t-2 border-gray-300 bg-gray-50">
-                    <td className="py-3 px-2 font-bold text-gray-800">Total</td>
-                    <td className="py-3 px-2 font-bold">{fmtDec(totalBudgeted)}</td>
-                    <td className="py-3 px-2 font-bold">{fmtDec(totalActual)}</td>
-                    <td className="py-3 px-2 font-bold text-blue-600">{fmtDec(Math.max(0, totalBudgeted - totalActual))}</td>
-                    <td colSpan={2} />
-                  </tr>
-                </tfoot>
-              </table>
-              {contract && (
-                <p className="text-xs text-gray-400 mt-3">Source quote: {contract.estimateNumber} · {contract.clientName}</p>
-              )}
-            </div>
-          )}
-
-          {/* ── Projections Tab ── */}
-          {detailTab === 'projections' && (
-            <div className="flex flex-col gap-4">
-              {job.projections.length === 0 && (
-                <div className="card text-center py-10 text-gray-400">
-                  <p className="text-sm">No projections posted yet.</p>
-                  <p className="text-xs mt-1">Click "Post Projection" to record your first monthly projection.</p>
-                </div>
-              )}
-              {[...job.projections].reverse().map(snap => (
-                <div key={snap.id} className="card">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h4 className="font-bold text-gray-800">{snap.periodLabel} Projection</h4>
-                      <p className="text-xs text-gray-400">Posted {new Date(snap.postedAt).toLocaleDateString()}</p>
-                    </div>
-                    <div className="flex gap-4 text-right text-sm">
-                      <div>
-                        <p className="text-xs text-gray-400">Invoiced</p>
-                        <p className="font-semibold text-green-700">{fmt(snap.invoicedToDate)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-400">Proj. Margin</p>
-                        <p className={`font-semibold ${snap.projectedMargin >= 20 ? 'text-green-700' : 'text-red-600'}`}>
-                          {snap.projectedMargin.toFixed(1)}%
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        {['Cost Code', 'Original Est.', 'Actual Cost', 'Remaining', 'Projected Cost', 'Margin %'].map(h => (
-                          <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase py-1.5 px-2">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {snap.costCodes.map(cc => (
-                        <tr key={cc.category} className="border-b border-gray-100">
-                          <td className="py-2 px-2 font-medium text-gray-700">{COST_CODE_LABELS[cc.category]}</td>
-                          <td className="py-2 px-2 text-gray-600">{fmtDec(cc.originalEstimate)}</td>
-                          <td className="py-2 px-2 text-gray-600">{fmtDec(cc.actualCost)}</td>
-                          <td className="py-2 px-2 text-blue-600">{fmtDec(cc.remainingCost)}</td>
-                          <td className="py-2 px-2 text-gray-700">{fmtDec(cc.projectedCost)}</td>
-                          <td className="py-2 px-2">
-                            <span className={cc.marginPct >= 20 ? 'text-green-600' : 'text-red-500'}>
-                              {cc.marginPct.toFixed(1)}%
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr className="border-t-2 border-gray-200 bg-gray-50 font-bold">
-                        <td className="py-2 px-2">Total</td>
-                        <td className="py-2 px-2">{fmtDec(snap.totalOriginal)}</td>
-                        <td className="py-2 px-2">{fmtDec(snap.totalActual)}</td>
-                        <td className="py-2 px-2 text-blue-600">{fmtDec(snap.totalRemaining)}</td>
-                        <td className="py-2 px-2">{fmtDec(snap.totalProjected)}</td>
-                        <td className={`py-2 px-2 ${snap.projectedMargin >= 20 ? 'text-green-600' : 'text-red-500'}`}>
-                          {snap.projectedMargin.toFixed(1)}%
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                  {snap.notes && <p className="text-xs text-gray-400 mt-2 italic">{snap.notes}</p>}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* ── Details Tab ── */}
-          {detailTab === 'details' && (
-            <div className="card">
-              <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-4">Job Details</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="label">Start Date</label>
-                  <input type="date" className="input" value={job.startDate}
-                    onChange={e => updateField('startDate', e.target.value)} />
-                </div>
-                <div>
-                  <label className="label">End Date</label>
-                  <input type="date" className="input" value={job.endDate}
-                    onChange={e => updateField('endDate', e.target.value)} />
-                </div>
-                <div>
-                  <label className="label">Crew</label>
-                  <select className="input" value={job.crewId ?? ''}
-                    onChange={e => updateField('crewId', e.target.value || undefined)}>
-                    <option value="">Unassigned</option>
-                    {data.crews.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Visits / Month</label>
-                  <input type="number" min="1" className="input" value={job.visitsPerMonth}
-                    onChange={e => updateField('visitsPerMonth', Number(e.target.value))} />
-                </div>
-                <div>
-                  <label className="label">Hours Per Visit</label>
-                  <input type="number" min="0" step="0.25" className="input" value={job.hoursPerVisit}
-                    onChange={e => updateField('hoursPerVisit', Number(e.target.value))} />
-                  {crew && crewMembers.length > 0 && (
-                    <p className="text-xs text-gray-400 mt-1">
-                      {crewMembers.length} crew member{crewMembers.length > 1 ? 's' : ''}: {crewMembers.map(e => e.name).join(', ')}
-                      {' · '}Est. {(job.hoursPerVisit * crewMembers.length).toFixed(1)} total hrs/visit
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <label className="label">Drive Time (minutes)</label>
-                  <input type="number" min="0" className="input" value={job.driveTimeMinutes}
-                    onChange={e => updateField('driveTimeMinutes', Number(e.target.value))} />
-                  <p className="text-xs text-gray-400 mt-1">Edit if driving from another job (not from shop)</p>
-                </div>
-                <div className="col-span-2">
-                  <label className="label">Notes</label>
-                  <textarea className="input" rows={3} value={notesDraft}
-                    onChange={e => setNotesDraft(e.target.value)}
-                    onBlur={() => { if (notesDraft !== job.notes) updateField('notes', notesDraft); }} />
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Post Projection Modal ── */}
-      {showProjectionModal && job && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-1">Post Monthly Projection</h3>
-            <p className="text-sm text-gray-500 mb-4">
-              {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} · {(pctElapsed(job) * 100).toFixed(0)}% through job timeline
-            </p>
-            <div className="bg-gray-50 rounded-xl p-4 mb-4 text-sm space-y-2">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Original Estimate</span>
-                <span className="font-semibold">{fmt(totalBudgeted)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Actual Cost to Date</span>
-                <span className="font-semibold">{fmt(totalActual)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Projected Cost at Completion</span>
-                <span className="font-semibold">{fmt(totalBudgeted * pctElapsed(job))}</span>
-              </div>
-              <div className="flex justify-between border-t border-gray-200 pt-2">
-                <span className="text-gray-500">Invoiced to Date</span>
-                <span className="font-semibold text-green-700">{fmt(invoicedTotal)}</span>
-              </div>
-            </div>
-            <div className="mb-4">
-              <label className="label">Notes (optional)</label>
-              <textarea className="input" rows={2} value={projNotes}
-                onChange={e => setProjNotes(e.target.value)}
-                placeholder="Any notes about this projection period..." />
-            </div>
-            <div className="flex justify-end gap-2">
-              <button className="btn-secondary text-sm px-4 py-2" onClick={() => setShowProjectionModal(false)}>Cancel</button>
-              <button className="btn-primary text-sm px-4 py-2" onClick={postProjection}>Post Projection</button>
-            </div>
-          </div>
-        </div>
+      ) : (
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-gray-100">
+              <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">Job #</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500">Client</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500">Status</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500">Revenue/mo</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500">Crew</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500">Dates</th>
+              <th className="w-20" />
+            </tr>
+          </thead>
+          <tbody>
+            {jobs.map(j => {
+              const contract = data.contracts.find(c => c.id === j.contractId);
+              const crew = j.crewId ? data.crews.find(c => c.id === j.crewId) : null;
+              return (
+                <tr
+                  key={j.id}
+                  onClick={() => navigate(`/jobs/${j.id}`)}
+                  className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer transition-colors"
+                >
+                  <td className="px-5 py-3">
+                    <p className="font-semibold text-sm text-gray-900">{j.jobNumber}</p>
+                    <p className="text-xs text-gray-400 capitalize">{j.jobType}</p>
+                  </td>
+                  <td className="px-4 py-3">
+                    <p className="font-semibold text-sm text-gray-900">{j.clientName}</p>
+                    {j.title && <p className="text-xs text-gray-400">{j.title}</p>}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${JOB_STATUS_COLOR[j.status] ?? 'bg-gray-100 text-gray-500'}`}>
+                      {j.status.replace('_', ' ')}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-700">
+                    {contract ? formatCurrency(contract.monthlyRevenue) + '/mo' : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-500">{crew?.name ?? 'Unassigned'}</td>
+                  <td className="px-4 py-3 text-xs text-gray-400">
+                    {j.startDate}{j.endDate ? ` → ${j.endDate}` : ''}
+                  </td>
+                  <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
+                    {j.status !== 'archived' && (
+                      <button
+                        onClick={e => archiveJob(j.id, e)}
+                        className="text-xs text-gray-400 hover:text-red-500 px-2 py-1 rounded transition-colors"
+                      >Archive</button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       )}
     </div>
   );

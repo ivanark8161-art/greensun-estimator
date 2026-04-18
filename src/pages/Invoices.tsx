@@ -602,7 +602,7 @@ export default function Invoices({ data, setData }: Props) {
                 <label className="label">Select Contract</label>
                 <select className="input" value={selectedContractId} onChange={e => setSelectedContractId(e.target.value)}>
                   <option value="">Choose a contract...</option>
-                  {data.contracts.filter(c => c.status === 'active').map(c => (
+                  {data.contracts.filter(c => c.status === 'active' && data.jobs.some(j => j.contractId === c.id && j.status === 'active')).map(c => (
                     <option key={c.id} value={c.id}>{c.clientName} — {formatCurrency(c.monthlyRevenue)}/mo</option>
                   ))}
                 </select>

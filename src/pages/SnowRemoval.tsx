@@ -32,7 +32,7 @@ export default function SnowRemoval({ data, setData }: Props) {
   const { settings } = data;
 
   // Active accounts (maintenance contracts) available for trip logging
-  const activeContracts = data.contracts.filter(c => c.status === 'active');
+  const activeContracts = data.contracts.filter(c => c.status === 'active' && data.jobs.some(j => j.contractId === c.id && j.status === 'active'));
 
   const [selectedContractId, setSelectedContractId] = useState<string>(activeContracts[0]?.id ?? '');
   const selectedContract = activeContracts.find(c => c.id === selectedContractId) ?? null;

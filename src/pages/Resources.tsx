@@ -701,7 +701,7 @@ function RatesTab({ data, setData }: Props) {
           </div>
 
           {(() => {
-            const activeContracts = data.contracts.filter(c => c.status === 'active');
+            const activeContracts = data.contracts.filter(c => c.status === 'active' && data.jobs.some(j => j.contractId === c.id && j.status === 'active'));
             const activeCount = activeContracts.length;
             const totalOverhead = data.overhead.reduce((s, o) => s + o.monthlyCost, 0);
             const isMaint = activeForm?.category === 'maintenance';
